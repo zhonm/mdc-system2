@@ -188,13 +188,14 @@ export function AppProvider({ children }) {
   // --- AUTHENTICATION & ACCESS CONTROL STATE ---
   const [usersList, setUsersList] = useState(() => {
     try {
+      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
       const saved = localStorage.getItem('mdc_users');
       if (saved) {
         const parsed = JSON.parse(saved);
-        const map = new Map(INITIAL_USERS.map(u => [u.id, u]));
-        parsed.forEach(u => map.set(u.id, { ...map.get(u.id), ...u }));
-        return Array.from(map.values());
+        return parsed.filter(u => !deletedIds.includes(u.id) && !deletedIds.includes(u.email?.toLowerCase()));
       }
+      // If no saved state, filter INITIAL_USERS against any deleted IDs
+      return INITIAL_USERS.filter(u => !deletedIds.includes(u.id) && !deletedIds.includes(u.email?.toLowerCase()));
     } catch (e) {
       console.warn('Error loading mdc_users:', e);
     }
@@ -484,6 +485,13 @@ export function AppProvider({ children }) {
       return { success: false, error: 'User already exists' };
     }
 
+    // Remove from deleted tracking if re-provisioning
+    try {
+      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      const filteredDeleted = deletedIds.filter(id => id !== cleanEmail);
+      localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(filteredDeleted));
+    } catch (e) {}
+
     const defaultPages = customPermissions || ROLE_PRESETS[role] || ROLE_PRESETS.warehouse_staff;
 
     const newUser = {
@@ -499,12 +507,14 @@ export function AppProvider({ children }) {
     };
 
     // Update local state immediately
-    setUsersList(prev => [...prev, newUser]);
+    const nextList = [...usersList.filter(u => u.email.toLowerCase() !== cleanEmail), newUser];
+    setUsersList(nextList);
+    localStorage.setItem('mdc_users', JSON.stringify(nextList));
 
     // Sync to Supabase PostgreSQL database
     if (supabase) {
       try {
-        const { data: inserted, error: insErr } = await supabase
+        const { data: inserted } = await supabase
           .from('profiles')
           .upsert({
             email: cleanEmail,
@@ -781,10 +791,27 @@ export function AppProvider({ children }) {
       }
     }
 
-    setUsersList(prev => prev.filter(u => u.id !== userId));
+    // 1. Record deleted IDs and clean emails into localStorage so they NEVER resurrect on refresh
+    try {
+      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+      if (!deletedIds.includes(userId)) deletedIds.push(userId);
+      if (target.email && !deletedIds.includes(target.email.toLowerCase())) {
+        deletedIds.push(target.email.toLowerCase());
+      }
+      localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(deletedIds));
+    } catch (e) {
+      console.warn('Error saving deleted user id:', e);
+    }
 
+    // 2. Filter local state and persist to localStorage
+    const nextList = usersList.filter(u => u.id !== userId && u.email?.toLowerCase() !== target.email?.toLowerCase());
+    setUsersList(nextList);
+    localStorage.setItem('mdc_users', JSON.stringify(nextList));
+
+    // 3. Delete from Supabase Database
     if (supabase) {
       try {
+        await supabase.from('user_page_permissions').delete().eq('user_id', userId);
         await supabase.from('profiles').delete().eq('id', userId);
         await supabase.from('profiles').delete().ilike('email', target.email);
       } catch (e) {
@@ -800,90 +827,90 @@ export function AppProvider({ children }) {
   const [categories, setCategories] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_categories');
-      return saved ? JSON.parse(saved) : seedData.categories;
+      return saved ? JSON.parse(saved) : (seedData.categories || []);
     } catch {
-      return seedData.categories;
+      return seedData.categories || [];
     }
   });
 
   const [sites, setSites] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_sites');
-      return saved ? JSON.parse(saved) : seedData.sites;
+      return saved ? JSON.parse(saved) : (seedData.sites || []);
     } catch {
-      return seedData.sites;
+      return seedData.sites || [];
     }
   });
 
   const [parts, setParts] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_parts');
-      return saved ? JSON.parse(saved) : seedData.parts;
+      return saved ? JSON.parse(saved) : (seedData.parts || []);
     } catch {
-      return seedData.parts;
+      return seedData.parts || [];
     }
   });
 
   const [forecastItems, setForecastItems] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_forecast');
-      return saved ? JSON.parse(saved) : [];
+      return saved ? JSON.parse(saved) : (seedData.forecastItems || []);
     } catch {
-      return [];
+      return seedData.forecastItems || [];
     }
   });
 
   const [allocations, setAllocations] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_allocations');
-      return saved ? JSON.parse(saved) : [];
+      return saved ? JSON.parse(saved) : (seedData.allocations || []);
     } catch {
-      return [];
+      return seedData.allocations || [];
     }
   });
 
   const [inventoryUnits, setInventoryUnits] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_inventory');
-      return saved ? JSON.parse(saved) : [];
+      return saved ? JSON.parse(saved) : (seedData.inventoryUnits || []);
     } catch {
-      return [];
+      return seedData.inventoryUnits || [];
     }
   });
 
   const [purchaseOrders, setPurchaseOrders] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_pos');
-      return saved ? JSON.parse(saved) : [];
+      return saved ? JSON.parse(saved) : (seedData.purchaseOrders || []);
     } catch {
-      return [];
+      return seedData.purchaseOrders || [];
     }
   });
 
   const [shipments, setShipments] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_shipments');
-      return saved ? JSON.parse(saved) : [];
+      return saved ? JSON.parse(saved) : (seedData.shipments || []);
     } catch {
-      return [];
+      return seedData.shipments || [];
     }
   });
 
   const [scanLogs, setScanLogs] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_scan_logs');
-      return saved ? JSON.parse(saved) : [];
+      return saved ? JSON.parse(saved) : (seedData.scanLogs || []);
     } catch {
-      return [];
+      return seedData.scanLogs || [];
     }
   });
 
   const [repairUsageRecords, setRepairUsageRecords] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_repair_usage');
-      return saved ? JSON.parse(saved) : [];
+      return saved ? JSON.parse(saved) : (seedData.repairUsageRecords || []);
     } catch {
-      return [];
+      return seedData.repairUsageRecords || [];
     }
   });
 
@@ -914,6 +941,8 @@ export function AppProvider({ children }) {
     const hydrateFromSupabase = async () => {
       if (!supabase) return;
       try {
+        const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+
         // 1. Hydrate User Profiles & Permissions from Supabase
         const { data: dbProfiles } = await supabase.from('profiles').select('*');
         if (dbProfiles && dbProfiles.length > 0) {
@@ -922,6 +951,10 @@ export function AppProvider({ children }) {
           setUsersList(prev => {
             const list = [...(prev || [])];
             dbProfiles.forEach(dbUser => {
+              if (deletedIds.includes(dbUser.id) || deletedIds.includes(dbUser.email?.toLowerCase())) {
+                return; // Do not re-add deleted users
+              }
+
               const userPerms = dbPerms
                 ? dbPerms.filter(p => p.user_id === dbUser.id).map(p => p.page_id)
                 : [];
@@ -953,7 +986,7 @@ export function AppProvider({ children }) {
                 list.push(mappedUser);
               }
             });
-            return list;
+            return list.filter(u => !deletedIds.includes(u.id) && !deletedIds.includes(u.email?.toLowerCase()));
           });
         }
 
@@ -1816,6 +1849,119 @@ export function AppProvider({ children }) {
     }
   };
 
+  const syncAllDataToCloud = async () => {
+    if (!supabase) {
+      showToast('Supabase client is not connected', 'error');
+      return { success: false };
+    }
+
+    try {
+      showToast('Syncing all local master data to Supabase cloud...', 'info');
+
+      // 1. Sync Categories
+      if (categories && categories.length > 0) {
+        const catRows = categories.map((c, i) => ({
+          code: c.code,
+          name: c.name,
+          has_imei: c.has_imei || false,
+          is_serialized: c.is_serialized ?? true,
+          sort_order: c.sort_order || i + 1
+        }));
+        await supabase.from('part_categories').upsert(catRows, { onConflict: 'code' });
+      }
+
+      // 2. Sync Sites
+      if (sites && sites.length > 0) {
+        const siteRows = sites.map(s => ({
+          code: s.code,
+          name: s.name,
+          region: s.region || 'Metro Manila',
+          address: s.address || '',
+          contact_person: s.contact_person || '',
+          contact_phone: s.contact_phone || '',
+          is_dc: s.is_dc || false,
+          is_active: s.is_active ?? true
+        }));
+        await supabase.from('sites').upsert(siteRows, { onConflict: 'code' });
+      }
+
+      // 3. Sync Parts Catalog
+      if (parts && parts.length > 0) {
+        const { data: dbCats } = await supabase.from('part_categories').select('id, code');
+        const catMap = new Map((dbCats || []).map(c => [c.code, c.id]));
+
+        const partRows = parts.map(p => {
+          const catCode = categories.find(c => c.id === p.category_id)?.code || 'BATTERY';
+          const catId = catMap.get(catCode) || null;
+          return {
+            part_number: p.part_number,
+            description: p.description,
+            iphone_model: p.iphone_model || '',
+            stocking_price: p.stocking_price || 0,
+            exchange_price: p.exchange_price || 0,
+            safety_stock_pct: p.safety_stock_pct || 0.05,
+            is_active: p.is_active ?? true,
+            ...(catId ? { category_id: catId } : {})
+          };
+        });
+        await supabase.from('parts').upsert(partRows, { onConflict: 'part_number' });
+      }
+
+      // 4. Sync Inventory Units
+      if (inventoryUnits && inventoryUnits.length > 0) {
+        const { data: dbParts } = await supabase.from('parts').select('id, part_number');
+        const { data: dbSites } = await supabase.from('sites').select('id, code');
+        const pMap = new Map((dbParts || []).map(p => [p.part_number, p.id]));
+        const sMap = new Map((dbSites || []).map(s => [s.code, s.id]));
+
+        const unitRows = inventoryUnits.map(u => {
+          const partId = pMap.get(u.part_number) || null;
+          const siteCode = sites.find(s => s.id === u.current_site_id)?.code || 'DC-MDC';
+          const siteId = sMap.get(siteCode) || null;
+
+          return {
+            serial_number: u.serial_number,
+            part_number: u.part_number,
+            status: u.status || 'in_stock',
+            box_number: u.box_number || 1,
+            received_by_name: u.received_by || 'Warehouse Operations',
+            ...(partId ? { part_id: partId } : {}),
+            ...(siteId ? { current_site_id: siteId } : {})
+          };
+        });
+        await supabase.from('inventory_units').upsert(unitRows, { onConflict: 'serial_number' });
+      }
+
+      // 5. Sync Users
+      if (usersList && usersList.length > 0) {
+        const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+        const activeUsers = usersList.filter(u => !deletedIds.includes(u.id) && !deletedIds.includes(u.email?.toLowerCase()));
+        for (const u of activeUsers) {
+          const { data: prof } = await supabase.from('profiles').upsert({
+            email: u.email.trim().toLowerCase(),
+            full_name: u.fullName.trim(),
+            role: u.role || 'warehouse_staff',
+            has_set_password: u.hasSetPassword ?? true,
+            is_active: u.isActive ?? true,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'email' }).select();
+
+          if (prof && prof[0] && u.permittedPages && u.permittedPages.length > 0) {
+            const perms = u.permittedPages.map(pg => ({ user_id: prof[0].id, page_id: pg }));
+            await supabase.from('user_page_permissions').upsert(perms, { onConflict: 'user_id,page_id' });
+          }
+        }
+      }
+
+      showToast('All local data successfully synced to Supabase Cloud Database!', 'success');
+      return { success: true };
+    } catch (err) {
+      console.error('Cloud sync error:', err);
+      showToast(`Cloud sync error: ${err.message}`, 'error');
+      return { success: false, error: err.message };
+    }
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -1869,6 +2015,7 @@ export function AppProvider({ children }) {
         savePart,
         saveSite,
         applyParsedDataset,
+        syncAllDataToCloud,
         resetToDefaultData,
         clearAllData
       }}

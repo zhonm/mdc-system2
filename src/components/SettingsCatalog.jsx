@@ -4,7 +4,7 @@ import UserAccessManagement from './UserAccessManagement';
 import { Settings, Plus, Database, Copy, Check, Smartphone, MapPin, Users } from 'lucide-react';
 
 export default function SettingsCatalog() {
-  const { parts, categories, sites, savePart, saveSite, currentUser, showToast } = useApp();
+  const { parts, categories, sites, savePart, saveSite, syncAllDataToCloud, currentUser, showToast } = useApp();
   const [activeTab, setActiveTab] = useState('parts'); // 'parts' | 'sites' | 'categories' | 'users' | 'sql'
   const [copied, setCopied] = useState(false);
 
@@ -269,17 +269,27 @@ export default function SettingsCatalog() {
       {/* 5. Supabase SQL Schema Tab */}
       {activeTab === 'sql' && (
         <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
             <div>
-              <h3>Supabase PostgreSQL Database Schema</h3>
+              <h3>Supabase PostgreSQL Cloud Database</h3>
               <p style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
-                Apply this script in your Supabase Project (SQL Editor) to create all tables, permissions matrix, and tightened RLS policies.
+                Sync all local master data (Parts, Sites, Serialized Inventory, Categories, Users) to Supabase cloud.
               </p>
             </div>
-            <button className="btn btn-primary" onClick={copySqlSchema}>
-              {copied ? <Check size={14} /> : <Copy size={14} />}
-              <span>{copied ? 'Copied!' : 'Copy Schema SQL'}</span>
-            </button>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                className="btn btn-primary"
+                onClick={syncAllDataToCloud}
+                style={{ background: '#10b981', borderColor: '#059669' }}
+              >
+                <Database size={14} />
+                <span>Sync Local Data to Cloud DB</span>
+              </button>
+              <button className="btn btn-secondary" onClick={copySqlSchema}>
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+                <span>{copied ? 'Copied!' : 'Copy Schema SQL'}</span>
+              </button>
+            </div>
           </div>
 
           <div
