@@ -1,0 +1,477 @@
+import React, { useState } from 'react';
+import { useApp } from '../context/AppContext';
+import { parseUniversalExcel, downloadSampleGsxFixablyCsv } from '../utils/excelParser';
+import {
+  UploadCloud,
+  CheckCircle,
+  FileSpreadsheet,
+  AlertCircle,
+  TrendingUp,
+  Split,
+  Boxes,
+  FileText,
+  Download,
+  Layers,
+  Activity,
+  Building2,
+  Cpu,
+  RotateCcw,
+  Sparkles,
+  ArrowRight,
+  RefreshCw,
+  Filter,
+  Smartphone,
+  Calendar
+} from 'lucide-react';
+
+export default function DataImport() {
+  const { applyParsedDataset, resetToDefaultData, clearAllData, sites, parts, showToast } = useApp();
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [parsedData, setParsedData] = useState(null);
+  const [fileName, setFileName] = useState('');
+  const [lastFileObj, setLastFileObj] = useState(null);
+  const [filterScope, setFilterScope] = useState('IPHONE_13_PLUS_BATTERY_DISPLAY');
+  const [selectedMonth, setSelectedMonth] = useState('7'); // Default to August (Month index 7) or 'auto'
+  const [previewTab, setPreviewTab] = useState('forecast'); // 'forecast' | 'allocation' | 'raw'
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setLastFileObj(file);
+    setFileName(file.name);
+    await processFile(file, filterScope, selectedMonth);
+  };
+
+  const processFile = async (file, scope, month) => {
+    setIsProcessing(true);
+    try {
+      const result = await parseUniversalExcel(file, sites, parts, { filterScope: scope, selectedMonth: month });
+      if (result.success) {
+        setParsedData(result);
+        if (result.type === 'RAW_USAGE_PIPELINE') {
+          setPreviewTab('forecast');
+          showToast(`Filtered to ${result.summary.partsCount} iPhone 13+ genuine parts (${result.summary.recordsCount} repairs matched)!`, 'success');
+        } else {
+          showToast(`Successfully analyzed "${file.name}" as ${result.type.replace('_', ' ')}!`, 'success');
+        }
+      } else {
+        showToast(result.error || 'Failed to parse file', 'error');
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleScopeChange = async (newScope) => {
+    setFilterScope(newScope);
+    if (lastFileObj) {
+      await processFile(lastFileObj, newScope, selectedMonth);
+    }
+  };
+
+  const handleMonthChange = async (newMonth) => {
+    setSelectedMonth(newMonth);
+    if (lastFileObj) {
+      await processFile(lastFileObj, filterScope, newMonth);
+    }
+  };
+
+  const handleConfirmImport = () => {
+    if (!parsedData) return;
+    applyParsedDataset(parsedData);
+    setParsedData(null);
+    setFileName('');
+    setLastFileObj(null);
+  };
+
+  const handleDownloadTemplate = () => {
+    downloadSampleGsxFixablyCsv(sites, parts);
+    showToast('Downloaded Fixably_GSX_Raw_Usage_Template.csv', 'info');
+  };
+
+  return (
+    <div className="data-import-view" style={{ maxWidth: '1150px', margin: '0 auto' }}>
+      {/* Header & Reset Tool */}
+      <div className="card" style={{ marginBottom: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <UploadCloud size={20} color="var(--primary)" />
+              <h2 style={{ fontSize: '18px', margin: 0 }}>Fixably / GSX Raw Usage & Dynamic Data Importer</h2>
+            </div>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              Upload raw repair exports (.csv, .xlsx) from Fixably / GSX. The engine automatically filters for <strong>iPhone 13 and newer (Battery & Display)</strong> and computes forecasts and allocations.
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleDownloadTemplate}
+              title="Download a formatted sample Fixably / GSX CSV file"
+            >
+              <Download size={14} />
+              <span>Download Sample Fixably/GSX CSV</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={clearAllData}
+              title="Reset to fresh empty state with zero forecasts or allocations"
+            >
+              <RotateCcw size={14} />
+              <span>Clear to Empty State</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={resetToDefaultData}
+              title="Load sample August 2026 dataset for demonstration"
+            >
+              <Sparkles size={14} color="var(--primary)" />
+              <span>Load Demo Data</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Configuration Bar: Target Month & Part Scope */}
+        <div
+          style={{
+            marginTop: '16px',
+            padding: '14px 18px',
+            borderRadius: 'var(--radius-sm)',
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-light)',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+            gap: '16px',
+            alignItems: 'center'
+          }}
+        >
+          {/* Target Month Selector */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+              <Calendar size={15} color="var(--primary)" />
+              <strong style={{ fontSize: '13px', color: 'var(--text-main)' }}>
+                Target Ingestion Month:
+              </strong>
+            </div>
+            <select
+              className="form-select"
+              value={selectedMonth}
+              onChange={(e) => handleMonthChange(e.target.value)}
+              style={{ width: '100%', fontSize: '13px', padding: '7px 10px', background: '#fff' }}
+            >
+              <option value="auto">Auto-Detect from Dates in File</option>
+              <option value="0">January (Jan)</option>
+              <option value="1">February (Feb)</option>
+              <option value="2">March (Mar)</option>
+              <option value="3">April (Apr)</option>
+              <option value="4">May (May)</option>
+              <option value="5">June (Jun)</option>
+              <option value="6">July (Jul)</option>
+              <option value="7">August (Aug) — Active Planning Period</option>
+              <option value="8">September (Sep)</option>
+              <option value="9">October (Oct)</option>
+              <option value="10">November (Nov)</option>
+              <option value="11">December (Dec)</option>
+            </select>
+          </div>
+
+          {/* Part Filter Scope Selector */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+              <Smartphone size={15} color="var(--primary)" />
+              <strong style={{ fontSize: '13px', color: 'var(--text-main)' }}>
+                Hardware Filter Scope:
+              </strong>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                className={`btn btn-sm ${filterScope === 'IPHONE_13_PLUS_BATTERY_DISPLAY' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => handleScopeChange('IPHONE_13_PLUS_BATTERY_DISPLAY')}
+                style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
+              >
+                iPhone 13+ (Battery & Display)
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${filterScope === 'ALL_PARTS' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => handleScopeChange('ALL_PARTS')}
+                style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
+              >
+                All Parts (Unfiltered)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Universal Dropzone */}
+        <div
+          style={{
+            border: '2px dashed var(--primary)',
+            borderRadius: 'var(--radius-md)',
+            padding: '40px 20px',
+            textAlign: 'center',
+            background: 'var(--bg-primary)',
+            cursor: 'pointer',
+            position: 'relative',
+            marginTop: '16px',
+            transition: 'all 0.2s ease'
+          }}
+        >
+          <input
+            type="file"
+            accept=".xlsx, .xls, .csv"
+            onChange={handleFileUpload}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              opacity: 0,
+              cursor: 'pointer'
+            }}
+          />
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+            <div
+              style={{
+                width: '56px',
+                height: '56px',
+                borderRadius: '50%',
+                background: 'var(--primary-light)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--primary)',
+                boxShadow: '0 4px 12px rgba(2, 132, 199, 0.2)'
+              }}
+            >
+              {isProcessing ? <RefreshCw className="animate-spin" size={26} /> : <UploadCloud size={26} />}
+            </div>
+            <div>
+              <strong style={{ fontSize: '16px', color: 'var(--text-main)' }}>
+                {fileName ? fileName : 'Drag and drop your Fixably/GSX CSV or Excel file here or click to browse'}
+              </strong>
+              <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Accepts <strong>.CSV</strong> and <strong>.XLSX</strong> • Target: <strong>iPhone 13, 14, 15, 16, 17 Battery & Display</strong>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Auto-Detection & Calculation Preview Card */}
+      {parsedData && (
+        <div className="card" style={{ border: '2px solid var(--primary)', background: '#f0f9ff', marginBottom: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '14px' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span className="badge badge-primary" style={{ fontSize: '12px', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  {parsedData.type === 'RAW_USAGE_PIPELINE' && <Sparkles size={13} />}
+                  {parsedData.type === 'FORECAST' && <TrendingUp size={13} />}
+                  {parsedData.type === 'ALLOCATION' && <Split size={13} />}
+                  {parsedData.type === 'INVENTORY_STOCK' && <Boxes size={13} />}
+                  {parsedData.type === 'RAW_USAGE_PIPELINE' ? 'Raw Fixably / GSX Engine Processed' : `Detected: ${parsedData.type.replace('_', ' ')}`}
+                </span>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  Source: <strong>{fileName}</strong> ({parsedData.sheetName})
+                </span>
+              </div>
+
+              <h3 style={{ fontSize: '18px', marginTop: '8px', color: 'var(--text-main)' }}>
+                {parsedData.type === 'RAW_USAGE_PIPELINE'
+                  ? 'Forecasting & Multi-Site Allocations Ready to Apply'
+                  : `Ready to Apply "${fileName}" to Live System`}
+              </h3>
+
+              <p style={{ fontSize: '13px', color: '#0369a1', marginTop: '2px' }}>
+                {parsedData.summary.description}
+              </p>
+            </div>
+
+            <button
+              className="btn btn-primary btn-lg"
+              onClick={handleConfirmImport}
+              style={{ boxShadow: 'var(--shadow-md)', minWidth: '220px' }}
+            >
+              <span>Apply & Update Live System</span>
+              <ArrowRight size={18} />
+            </button>
+          </div>
+
+          {/* Quick Metrics KPIs */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+            {parsedData.summary.recordsCount !== undefined && (
+              <div style={{ background: '#fff', padding: '12px 14px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
+                <div style={{ fontSize: '11px', color: '#0369a1', fontWeight: 600, textTransform: 'uppercase' }}>In-Scope Repairs Matched</div>
+                <div style={{ fontSize: '20px', fontWeight: 700, color: '#0284c7' }}>{parsedData.summary.recordsCount}</div>
+              </div>
+            )}
+            <div style={{ background: '#fff', padding: '12px 14px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
+              <div style={{ fontSize: '11px', color: '#0369a1', fontWeight: 600, textTransform: 'uppercase' }}>Target iPhone Parts</div>
+              <div style={{ fontSize: '20px', fontWeight: 700, color: '#0284c7' }}>
+                {parsedData.payload?.forecastItems?.length || parsedData.payload?.allocations?.length || parsedData.summary.partsCount || 0}
+              </div>
+            </div>
+            {parsedData.payload?.sites?.length > 0 && (
+              <div style={{ background: '#fff', padding: '12px 14px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
+                <div style={{ fontSize: '11px', color: '#0369a1', fontWeight: 600, textTransform: 'uppercase' }}>Service Sites Matched</div>
+                <div style={{ fontSize: '20px', fontWeight: 700, color: '#0284c7' }}>{parsedData.payload.sites.length}</div>
+              </div>
+            )}
+            <div style={{ background: '#fff', padding: '12px 14px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
+              <div style={{ fontSize: '11px', color: '#0369a1', fontWeight: 600, textTransform: 'uppercase' }}>Total Demand Forecast</div>
+              <div style={{ fontSize: '20px', fontWeight: 700, color: '#0284c7' }}>
+                {parsedData.summary.totalForecastedUnits || (parsedData.payload?.forecastItems || []).reduce((acc, f) => acc + (f.final_forecast || f.computed_forecast || 0), 0)} units
+              </div>
+            </div>
+          </div>
+
+          {/* Sub Navigation Tabs */}
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+            {parsedData.payload?.forecastItems?.length > 0 && (
+              <button
+                className={`btn btn-sm ${previewTab === 'forecast' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setPreviewTab('forecast')}
+              >
+                <TrendingUp size={14} />
+                <span>Demand Forecasts ({parsedData.payload.forecastItems.length})</span>
+              </button>
+            )}
+            {parsedData.payload?.allocations?.length > 0 && (
+              <button
+                className={`btn btn-sm ${previewTab === 'allocation' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setPreviewTab('allocation')}
+              >
+                <Split size={14} />
+                <span>Master Allocations ({parsedData.payload.allocations.length})</span>
+              </button>
+            )}
+            {parsedData.payload?.records?.length > 0 && (
+              <button
+                className={`btn btn-sm ${previewTab === 'raw' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setPreviewTab('raw')}
+              >
+                <FileText size={14} />
+                <span>In-Scope Repair Records ({parsedData.payload.records.length})</span>
+              </button>
+            )}
+          </div>
+
+          {/* Preview Tab 1: Forecasts */}
+          {previewTab === 'forecast' && parsedData.payload?.forecastItems?.length > 0 && (
+            <div className="table-container" style={{ maxHeight: '360px', overflowY: 'auto', background: '#fff', borderRadius: '8px' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Part Number</th>
+                    <th>Description</th>
+                    <th style={{ textAlign: 'center' }}>Monthly Trend (Jan-Aug)</th>
+                    <th style={{ textAlign: 'center' }}>August Demand</th>
+                    <th style={{ textAlign: 'center' }}>Safety Stock (5%)</th>
+                    <th style={{ textAlign: 'center', background: '#ecfdf5', color: '#065f46' }}>Recommended Order</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsedData.payload.forecastItems.map(item => (
+                    <tr key={item.part_id}>
+                      <td className="font-mono"><strong>{item.part_number}</strong></td>
+                      <td>{item.description}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+                        {item.ytd_monthly_counts.join(', ')}
+                      </td>
+                      <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                        {item.final_forecast || item.computed_forecast}
+                      </td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                        {item.safety_stock_units}
+                      </td>
+                      <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', color: '#15803d' }}>
+                        {item.recommended_order}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Preview Tab 2: Allocations */}
+          {previewTab === 'allocation' && parsedData.payload?.allocations?.length > 0 && (
+            <div className="table-container" style={{ maxHeight: '360px', overflowY: 'auto', background: '#fff', borderRadius: '8px' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Part Number</th>
+                    <th>Description</th>
+                    <th style={{ textAlign: 'center', background: '#e0f2fe' }}>Total Allocated</th>
+                    <th style={{ textAlign: 'center' }}>Week 1</th>
+                    <th style={{ textAlign: 'center' }}>Week 2</th>
+                    <th style={{ textAlign: 'center' }}>Week 3</th>
+                    <th style={{ textAlign: 'center' }}>Week 4</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsedData.payload.allocations.map(item => (
+                    <tr key={item.part_id}>
+                      <td className="font-mono"><strong>{item.part_number}</strong></td>
+                      <td>{item.description}</td>
+                      <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--primary)' }}>
+                        {item.total_allocated_qty}
+                      </td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w1_qty}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w2_qty}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w3_qty}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w4_qty}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Preview Tab 3: Raw Repair Records */}
+          {parsedData.type === 'RAW_USAGE_PIPELINE' && previewTab === 'raw' && (
+            <div className="table-container" style={{ maxHeight: '360px', overflowY: 'auto', background: '#fff', borderRadius: '8px' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Repair #</th>
+                    <th>Date / Month</th>
+                    <th>Branch / Site</th>
+                    <th>Part Number</th>
+                    <th>Description</th>
+                    <th style={{ textAlign: 'center' }}>Qty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsedData.payload.records.slice(0, 100).map((rec, idx) => (
+                    <tr key={idx}>
+                      <td className="font-mono">{rec.repairNumber}</td>
+                      <td>{rec.closedDate}</td>
+                      <td>{rec.rawSiteName || rec.siteId}</td>
+                      <td className="font-mono"><strong>{rec.partNumber}</strong></td>
+                      <td>{rec.description}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{rec.quantity}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {parsedData.payload.records.length > 100 && (
+                <div style={{ textAlign: 'center', padding: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  Showing first 100 of {parsedData.payload.records.length} records. All records will be saved.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
