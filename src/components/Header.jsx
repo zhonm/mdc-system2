@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Search, Plus, Barcode, PackageCheck } from 'lucide-react';
+import { Search, Plus, Barcode, PackageCheck, Database, RefreshCw, CheckCircle2 } from 'lucide-react';
 
 export default function Header() {
   const {
@@ -10,8 +10,21 @@ export default function Header() {
     setSelectedCategory,
     categories,
     searchQuery,
-    setSearchQuery
+    setSearchQuery,
+    syncAllDataToCloud,
+    showToast
   } = useApp();
+
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    try {
+      await syncAllDataToCloud();
+    } finally {
+      setTimeout(() => setIsSyncing(false), 800);
+    }
+  };
 
   const tabTitles = {
     dashboard: 'Distribution Center Overview',
@@ -23,7 +36,8 @@ export default function Header() {
     'scan-out': 'Pack Scan-Out & Packing List Generator',
     shipments: 'Shipment Manifests & Proof of Delivery',
     audit: 'Serialized Lifecycle & Traceability Audit',
-    settings: 'Parts Catalog & Site Configuration'
+    settings: 'Parts Catalog & Site Configuration',
+    'user-access': 'User Access & Permissions Management'
   };
 
   return (
@@ -68,6 +82,18 @@ export default function Header() {
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
+
+        {/* Live Cloud DB Sync Button */}
+        <button
+          className="btn btn-secondary btn-sm"
+          onClick={handleManualSync}
+          disabled={isSyncing}
+          title="Synchronize all local data to Supabase Cloud Database"
+          style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.3)' }}
+        >
+          {isSyncing ? <RefreshCw size={14} className="spin" /> : <Database size={14} />}
+          <span>{isSyncing ? 'Syncing...' : 'Sync Cloud DB'}</span>
+        </button>
 
         <button
           className="btn btn-primary btn-sm"

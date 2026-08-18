@@ -53,8 +53,14 @@ export default function ScanInReceiving() {
 
   // Keep sessionScans in sync with inventoryUnits updates
   useEffect(() => {
+    if ((!sessionScans || sessionScans.length === 0) && inventoryUnits && inventoryUnits.length > 0) {
+      setSessionScans(inventoryUnits.slice(0, 100));
+    }
+  }, [inventoryUnits]);
+
+  useEffect(() => {
     try {
-      localStorage.setItem('mdc_recent_scans', JSON.stringify(sessionScans.slice(0, 500)));
+      localStorage.setItem('mdc_recent_scans', JSON.stringify((sessionScans || []).slice(0, 500)));
     } catch (e) {
       console.warn('Could not save mdc_recent_scans:', e);
     }
