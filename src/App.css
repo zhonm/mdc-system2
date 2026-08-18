@@ -655,3 +655,246 @@
   color: var(--text-main);
 }
 
+/* ==========================================================
+   Master Allocation Matrix & Weekly Batches Grid Styles
+   ========================================================== */
+.allocation-matrix-container {
+  width: 100%;
+  max-height: 720px;
+  overflow-x: auto;
+  overflow-y: auto;
+  position: relative;
+  background: #ffffff;
+  border-radius: var(--radius-md);
+}
+
+/* Master Table Core */
+.matrix-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+}
+
+.matrix-table th {
+  padding: 10px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  border-bottom: 1px solid #334155;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.matrix-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #e2e8f0;
+  border-right: 1px solid #f1f5f9;
+  color: var(--text-main);
+  vertical-align: middle;
+}
+
+.matrix-table tr:hover td {
+  background-color: #f8fafc !important;
+}
+
+/* Sticky frozen columns on the left */
+.matrix-col-sticky-1 {
+  position: sticky;
+  left: 0;
+  z-index: 6;
+  width: 80px;
+  min-width: 80px;
+  max-width: 80px;
+}
+
+.matrix-col-sticky-2 {
+  position: sticky;
+  left: 80px;
+  z-index: 6;
+  width: 100px;
+  min-width: 100px;
+  max-width: 100px;
+}
+
+.matrix-col-sticky-3 {
+  position: sticky;
+  left: 180px;
+  z-index: 6;
+  min-width: 240px;
+  max-width: 280px;
+  border-right: 2px solid #cbd5e1 !important;
+  box-shadow: 3px 0 6px -2px rgba(0, 0, 0, 0.08);
+}
+
+/* Sticky Header Cells */
+.matrix-th-sticky-1 {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 30;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.matrix-th-sticky-2 {
+  position: sticky;
+  top: 0;
+  left: 80px;
+  z-index: 30;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.matrix-th-sticky-3 {
+  position: sticky;
+  top: 0;
+  left: 180px;
+  z-index: 30;
+  background: #0f172a;
+  color: #f8fafc;
+  border-right: 2px solid #475569 !important;
+  box-shadow: 3px 0 6px -2px rgba(0, 0, 0, 0.2);
+}
+
+/* Remove number spinners from input fields */
+.matrix-cell-input::-webkit-outer-spin-button,
+.matrix-cell-input::-webkit-inner-spin-button {
+  -webkit-appearance: none !important;
+  margin: 0 !important;
+}
+
+.matrix-cell-input[type=number] {
+  -moz-appearance: textfield !important;
+}
+
+/* Matrix Input Cell Styling */
+.matrix-cell-input {
+  width: 38px;
+  height: 26px;
+  font-size: 11.5px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  border-radius: 4px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 0 2px;
+  transition: all 0.15s ease;
+  outline: none;
+  display: inline-block;
+}
+
+.matrix-cell-input:hover {
+  border-color: #93c5fd;
+}
+
+.matrix-cell-input:focus {
+  border-color: #0284c7;
+  background: #ffffff;
+  box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.25);
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.matrix-cell-input.has-value {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #166534;
+  font-weight: 700;
+}
+
+.matrix-cell-input.is-zero {
+  background: #ffffff;
+  border-color: #e2e8f0;
+  color: #94a3b8;
+  font-weight: 400;
+}
+
+/* KPI Summary Card on Allocation Matrix */
+.matrix-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.matrix-kpi-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+}
+
+.matrix-kpi-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Commodity Category Header Band */
+.matrix-category-header {
+  background: #f1f5f9;
+  border-top: 2px solid #cbd5e1;
+  border-bottom: 1px solid #cbd5e1;
+}
+
+.matrix-category-header td {
+  padding: 10px 14px !important;
+  font-weight: 700;
+  font-size: 13px;
+  color: #0f172a;
+  letter-spacing: 0.03em;
+  background: #f1f5f9 !important;
+}
+
+/* Table Footer - Sticky Bottom Styling */
+.matrix-footer-row-1 {
+  position: sticky;
+  bottom: 34px;
+  background: #0f172a;
+  color: #ffffff;
+  font-weight: 700;
+  z-index: 20;
+}
+
+.matrix-footer-row-1 td {
+  border-top: 2px solid #38bdf8;
+  border-bottom: 1px solid #1e293b;
+  padding: 8px 6px;
+  background: #0f172a;
+}
+
+.matrix-footer-row-2 {
+  position: sticky;
+  bottom: 0;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-weight: 600;
+  font-size: 11px;
+  z-index: 20;
+}
+
+.matrix-footer-row-2 td {
+  border-bottom: none;
+  padding: 8px 6px;
+  background: #1e293b;
+}
+
+.matrix-footer-sticky-label {
+  position: sticky;
+  left: 0;
+  z-index: 22;
+  border-right: 2px solid #475569 !important;
+  box-shadow: 3px 0 6px -2px rgba(0, 0, 0, 0.3);
+}
+

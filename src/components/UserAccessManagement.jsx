@@ -75,26 +75,26 @@ export default function UserAccessManagement() {
     setForm(emptyForm);
   };
 
-  const handleCreateUser = (e) => {
+  const handleCreateUser = async (e) => {
     e.preventDefault();
     if (!form.fullName.trim() || !form.email.trim()) {
       showToast('Please provide full name and company email', 'error');
       return;
     }
 
-    const res = provisionUser({
+    const res = await provisionUser({
       fullName: form.fullName.trim(),
       email: form.email.trim(),
       role: form.role,
       siteId: form.siteId
     });
 
-    if (res.success) {
+    if (res && res.success !== false) {
       closeModals();
     }
   };
 
-  const handleUpdateUser = (e) => {
+  const handleUpdateUser = async (e) => {
     e.preventDefault();
     if (!form.fullName.trim() || !form.email.trim()) {
       showToast('Please provide full name and company email', 'error');
@@ -102,7 +102,7 @@ export default function UserAccessManagement() {
     }
 
     if (updateUser) {
-      const res = updateUser(editingUser.id, {
+      const res = await updateUser(editingUser.id, {
         fullName: form.fullName.trim(),
         email: form.email.trim(),
         role: form.role,
@@ -116,10 +116,10 @@ export default function UserAccessManagement() {
     }
   };
 
-  const handleDeleteUser = () => {
+  const handleDeleteUser = async () => {
     if (!deletingUser) return;
     if (deleteUser) {
-      const res = deleteUser(deletingUser.id);
+      const res = await deleteUser(deletingUser.id);
       if (res && res.success !== false) {
         closeModals();
       }

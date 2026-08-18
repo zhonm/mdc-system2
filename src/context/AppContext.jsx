@@ -237,14 +237,52 @@ export function AppProvider({ children }) {
 
   // --- AUTH ACTIONS ---
 
+  // --- AUTH ACTIONS ---
+
   // 1. Verify Company Email during Login
   const verifyLoginEmail = async (rawEmail) => {
-    let email = rawEmail.trim().toLowerCase();
-    if (email === 'zhon.manaois@mobilecare.com.ph') email = 'zhon@mobilecare.com.ph';
-    if (email === 'joshua.juvida@mobilecare.com.ph') email = 'joshua@mobilecare.com.ph';
-    if (email === 'anjo.alcazar@mobilecare.com.ph') email = 'anjo@mobilecare.com.ph';
+    const email = rawEmail.trim().toLowerCase();
 
-    const user = usersList.find(u => u.email.toLowerCase() === email);
+    // Check in local state first
+    let user = usersList.find(u => u.email.toLowerCase() === email);
+
+    // If not found in local state, query Supabase profiles
+    if (!user && supabase) {
+      try {
+        const { data: dbUser } = await supabase
+          .from('profiles')
+          .select('*')
+          .ilike('email', email)
+          .maybeSingle();
+
+        if (dbUser) {
+          const { data: dbPerms } = await supabase
+            .from('user_page_permissions')
+            .select('page_id')
+            .eq('user_id', dbUser.id);
+
+          const perms = dbPerms && dbPerms.length > 0
+            ? dbPerms.map(p => p.page_id)
+            : (ROLE_PRESETS[dbUser.role] || ROLE_PRESETS.warehouse_staff);
+
+          user = {
+            id: dbUser.id,
+            email: dbUser.email,
+            fullName: dbUser.full_name || dbUser.fullName,
+            role: dbUser.role || 'warehouse_staff',
+            siteId: dbUser.site_id || 'site-dc',
+            hasSetPassword: dbUser.has_set_password ?? true,
+            passwordHash: dbUser.password_hash || 'Password123',
+            isActive: dbUser.is_active ?? true,
+            permittedPages: dbUser.role === 'superadmin' ? ROLE_PRESETS.superadmin : perms
+          };
+
+          setUsersList(prev => [...prev.filter(u => u.id !== user.id && u.email.toLowerCase() !== email), user]);
+        }
+      } catch (e) {
+        console.warn('Supabase email verification lookup note:', e.message);
+      }
+    }
 
     if (!user) {
       return {
@@ -269,12 +307,46 @@ export function AppProvider({ children }) {
 
   // 2. Authenticate Returning User with Password
   const signInWithPassword = async (rawEmail, password) => {
-    let cleanEmail = rawEmail.trim().toLowerCase();
-    if (cleanEmail === 'zhon.manaois@mobilecare.com.ph') cleanEmail = 'zhon@mobilecare.com.ph';
-    if (cleanEmail === 'joshua.juvida@mobilecare.com.ph') cleanEmail = 'joshua@mobilecare.com.ph';
-    if (cleanEmail === 'anjo.alcazar@mobilecare.com.ph') cleanEmail = 'anjo@mobilecare.com.ph';
+    const cleanEmail = rawEmail.trim().toLowerCase();
 
-    const user = usersList.find(u => u.email.toLowerCase() === cleanEmail);
+    let user = usersList.find(u => u.email.toLowerCase() === cleanEmail);
+
+    if (!user && supabase) {
+      try {
+        const { data: dbUser } = await supabase
+          .from('profiles')
+          .select('*')
+          .ilike('email', cleanEmail)
+          .maybeSingle();
+
+        if (dbUser) {
+          const { data: dbPerms } = await supabase
+            .from('user_page_permissions')
+            .select('page_id')
+            .eq('user_id', dbUser.id);
+
+          const perms = dbPerms && dbPerms.length > 0
+            ? dbPerms.map(p => p.page_id)
+            : (ROLE_PRESETS[dbUser.role] || ROLE_PRESETS.warehouse_staff);
+
+          user = {
+            id: dbUser.id,
+            email: dbUser.email,
+            fullName: dbUser.full_name || dbUser.fullName,
+            role: dbUser.role || 'warehouse_staff',
+            siteId: dbUser.site_id || 'site-dc',
+            hasSetPassword: dbUser.has_set_password ?? true,
+            passwordHash: dbUser.password_hash || 'Password123',
+            isActive: dbUser.is_active ?? true,
+            permittedPages: dbUser.role === 'superadmin' ? ROLE_PRESETS.superadmin : perms
+          };
+
+          setUsersList(prev => [...prev.filter(u => u.id !== user.id && u.email.toLowerCase() !== cleanEmail), user]);
+        }
+      } catch (e) {
+        console.warn('Supabase login profile lookup note:', e.message);
+      }
+    }
 
     if (!user) {
       return { success: false, error: 'User not found' };
@@ -284,7 +356,7 @@ export function AppProvider({ children }) {
       return { success: false, error: 'Account is deactivated' };
     }
 
-    // Try Supabase auth if connected, or verify against stored hash
+    // Try Supabase auth if connected
     try {
       if (supabase) {
         await supabase.auth.signInWithPassword({ email: cleanEmail, password });
@@ -293,7 +365,7 @@ export function AppProvider({ children }) {
       // Offline fallback
     }
 
-    // Verify password (Accepts 'Password123' or whatever password they configured)
+    // Verify password (Accepts configured password or default 'Password123')
     if (user.passwordHash && user.passwordHash !== password && password !== 'Password123') {
       barcodeAudio.playError();
       return { success: false, error: 'Incorrect password. Please try again or reset password.' };
@@ -315,10 +387,14 @@ export function AppProvider({ children }) {
       return { success: false, error: 'User profile not found' };
     }
 
-    // Try updating Supabase auth user
+    // Try updating Supabase auth user & profile
     try {
       if (supabase) {
         await supabase.auth.updateUser({ password: newPassword });
+        await supabase
+          .from('profiles')
+          .update({ has_set_password: true, updated_at: new Date().toISOString() })
+          .ilike('email', cleanEmail);
       }
     } catch (e) {
       // Offline mode fallback
@@ -353,10 +429,10 @@ export function AppProvider({ children }) {
     showToast('Signed out successfully.', 'info');
   };
 
-  // --- USER ACCESS MANAGEMENT ACTIONS (Superadmin Only) ---
+  // --- USER ACCESS MANAGEMENT ACTIONS (Superadmin Only with Database Sync) ---
 
   // 5. Create / Provision New User
-  const provisionUser = ({ fullName, email, role, siteId, customPermissions }) => {
+  const provisionUser = async ({ fullName, email, role, siteId, customPermissions }) => {
     const cleanEmail = email.trim().toLowerCase();
     if (usersList.some(u => u.email.toLowerCase() === cleanEmail)) {
       showToast(`User with email ${cleanEmail} is already provisioned!`, 'error');
@@ -377,26 +453,58 @@ export function AppProvider({ children }) {
       permittedPages: defaultPages
     };
 
+    // Update local state immediately
     setUsersList(prev => [...prev, newUser]);
+
+    // Sync to Supabase PostgreSQL database
+    if (supabase) {
+      try {
+        const { data: inserted, error: insErr } = await supabase
+          .from('profiles')
+          .upsert({
+            email: cleanEmail,
+            full_name: fullName.trim(),
+            role: role,
+            has_set_password: false,
+            is_active: true,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'email' })
+          .select();
+
+        if (inserted && inserted[0] && defaultPages && defaultPages.length > 0) {
+          const permRows = defaultPages.map(pageId => ({
+            user_id: inserted[0].id,
+            page_id: pageId
+          }));
+          await supabase.from('user_page_permissions').upsert(permRows, { onConflict: 'user_id,page_id' });
+        }
+      } catch (dbErr) {
+        console.warn('Could not sync provisioned user to Supabase:', dbErr.message);
+      }
+    }
+
     showToast(`Provisioned user ${fullName} (${cleanEmail}). First-time setup required on initial login.`, 'success');
     return { success: true, user: newUser };
   };
 
   // 6. Update User Page Permission
-  const toggleUserPagePermission = (userId, pageId) => {
+  const toggleUserPagePermission = async (userId, pageId) => {
+    const targetUser = usersList.find(u => u.id === userId);
+    if (!targetUser) return;
+
+    if (targetUser.role === 'superadmin' && pageId === 'user-access') {
+      showToast('Superadmin cannot revoke access to User Access Management', 'warning');
+      return;
+    }
+
+    const hasPage = targetUser.permittedPages?.includes(pageId);
+    const newPerms = hasPage
+      ? targetUser.permittedPages.filter(p => p !== pageId)
+      : [...(targetUser.permittedPages || []), pageId];
+
     setUsersList(prev => prev.map(user => {
       if (user.id === userId) {
-        // Prevent superadmin from locking themselves out of user-access
-        if (user.role === 'superadmin' && pageId === 'user-access') {
-          showToast('Superadmin cannot revoke access to User Access Management', 'warning');
-          return user;
-        }
-
-        const hasPage = user.permittedPages?.includes(pageId);
-        const newPerms = hasPage
-          ? user.permittedPages.filter(p => p !== pageId)
-          : [...(user.permittedPages || []), pageId];
-
         return {
           ...user,
           permittedPages: newPerms
@@ -404,10 +512,40 @@ export function AppProvider({ children }) {
       }
       return user;
     }));
+
+    // Sync to Supabase user_page_permissions
+    if (supabase) {
+      try {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('id')
+          .or(`id.eq.${userId},email.ilike.${targetUser.email}`)
+          .maybeSingle();
+
+        if (prof?.id) {
+          if (hasPage) {
+            await supabase
+              .from('user_page_permissions')
+              .delete()
+              .eq('user_id', prof.id)
+              .eq('page_id', pageId);
+          } else {
+            await supabase
+              .from('user_page_permissions')
+              .upsert({ user_id: prof.id, page_id: pageId }, { onConflict: 'user_id,page_id' });
+          }
+        }
+      } catch (e) {
+        console.warn('Supabase permission sync notice:', e.message);
+      }
+    }
   };
 
   // 7. Apply Role Preset to User
-  const applyRolePresetToUser = (userId, presetRole) => {
+  const applyRolePresetToUser = async (userId, presetRole) => {
+    const targetUser = usersList.find(u => u.id === userId);
+    if (!targetUser) return;
+
     const pages = ROLE_PRESETS[presetRole] || [];
     setUsersList(prev => prev.map(user => {
       if (user.id === userId) {
@@ -419,29 +557,71 @@ export function AppProvider({ children }) {
       }
       return user;
     }));
+
+    if (supabase) {
+      try {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('id')
+          .or(`id.eq.${userId},email.ilike.${targetUser.email}`)
+          .maybeSingle();
+
+        if (prof?.id) {
+          await supabase
+            .from('profiles')
+            .update({ role: presetRole, updated_at: new Date().toISOString() })
+            .eq('id', prof.id);
+
+          await supabase
+            .from('user_page_permissions')
+            .delete()
+            .eq('user_id', prof.id);
+
+          const rows = pages.map(pg => ({ user_id: prof.id, page_id: pg }));
+          if (rows.length > 0) {
+            await supabase.from('user_page_permissions').upsert(rows, { onConflict: 'user_id,page_id' });
+          }
+        }
+      } catch (e) {
+        console.warn('Supabase role preset sync notice:', e.message);
+      }
+    }
+
     showToast(`Applied ${presetRole} default permissions`, 'success');
   };
 
   // 8. Toggle User Active Status
-  const toggleUserActiveStatus = (userId) => {
+  const toggleUserActiveStatus = async (userId) => {
     const target = usersList.find(u => u.id === userId);
     if (target?.id === currentUser?.id) {
       showToast('You cannot deactivate your own logged-in account', 'warning');
       return;
     }
 
+    const nextState = !target.isActive;
     setUsersList(prev => prev.map(user => {
       if (user.id === userId) {
-        const nextState = !user.isActive;
-        showToast(`Account for ${user.fullName} is now ${nextState ? 'Active' : 'Deactivated'}`, 'info');
         return { ...user, isActive: nextState };
       }
       return user;
     }));
+
+    if (supabase) {
+      try {
+        await supabase
+          .from('profiles')
+          .update({ is_active: nextState, updated_at: new Date().toISOString() })
+          .or(`id.eq.${userId},email.ilike.${target.email}`);
+      } catch (e) {
+        console.warn('Supabase status sync notice:', e.message);
+      }
+    }
+
+    showToast(`Account for ${target.fullName} is now ${nextState ? 'Active' : 'Deactivated'}`, 'info');
   };
 
-  // 9. Update User Profile
-  const updateUser = (userId, { fullName, email, role, siteId }) => {
+  // 9. Update User Profile (Full Database & Email Sync)
+  const updateUser = async (userId, { fullName, email, role, siteId }) => {
     const target = usersList.find(u => u.id === userId);
     if (!target) {
       return { success: false, error: 'User not found' };
@@ -453,6 +633,7 @@ export function AppProvider({ children }) {
       return { success: false, error: 'Email already in use' };
     }
 
+    const previousEmail = target.email;
     const roleChanged = role !== target.role;
     const permittedPages = roleChanged
       ? (ROLE_PRESETS[role] || target.permittedPages)
@@ -467,18 +648,76 @@ export function AppProvider({ children }) {
       permittedPages: role === 'superadmin' ? ROLE_PRESETS.superadmin : permittedPages
     };
 
+    // 1. Update React local state immediately
     setUsersList(prev => prev.map(u => (u.id === userId ? updatedUser : u)));
 
-    if (currentUser?.id === userId) {
+    // 2. Update currentUser if editing own account
+    if (currentUser?.id === userId || currentUser?.email?.toLowerCase() === previousEmail.toLowerCase()) {
       setCurrentUser(updatedUser);
     }
 
-    showToast(`Updated profile for ${updatedUser.fullName}`, 'success');
+    // 3. Sync to Supabase PostgreSQL Database (Profiles Table)
+    if (supabase) {
+      try {
+        let updatedInDb = false;
+
+        const updatePayload = {
+          email: cleanEmail,
+          full_name: fullName.trim(),
+          role: role,
+          updated_at: new Date().toISOString()
+        };
+
+        if (siteId && !siteId.startsWith('site-')) {
+          updatePayload.site_id = siteId;
+        }
+
+        // Try updating by ID first
+        const { data: byIdData } = await supabase
+          .from('profiles')
+          .update(updatePayload)
+          .eq('id', userId)
+          .select();
+
+        if (byIdData && byIdData.length > 0) {
+          updatedInDb = true;
+        } else {
+          // If ID didn't match (e.g. UUID vs local key), update by previous email!
+          const { data: byEmailData } = await supabase
+            .from('profiles')
+            .update(updatePayload)
+            .ilike('email', previousEmail)
+            .select();
+
+          if (byEmailData && byEmailData.length > 0) {
+            updatedInDb = true;
+          }
+        }
+
+        // If not found in database, insert/upsert the profile
+        if (!updatedInDb) {
+          await supabase
+            .from('profiles')
+            .upsert({
+              email: cleanEmail,
+              full_name: fullName.trim(),
+              role: role,
+              has_set_password: target.hasSetPassword ?? true,
+              is_active: target.isActive ?? true,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'email' });
+        }
+      } catch (dbErr) {
+        console.warn('Could not sync user update to Supabase database:', dbErr.message);
+      }
+    }
+
+    showToast(`Updated profile for ${updatedUser.fullName} (${cleanEmail})`, 'success');
     return { success: true, user: updatedUser };
   };
 
   // 10. Delete User
-  const deleteUser = (userId) => {
+  const deleteUser = async (userId) => {
     const target = usersList.find(u => u.id === userId);
     if (!target) {
       return { success: false, error: 'User not found' };
@@ -498,6 +737,16 @@ export function AppProvider({ children }) {
     }
 
     setUsersList(prev => prev.filter(u => u.id !== userId));
+
+    if (supabase) {
+      try {
+        await supabase.from('profiles').delete().eq('id', userId);
+        await supabase.from('profiles').delete().ilike('email', target.email);
+      } catch (e) {
+        console.warn('Supabase delete user notice:', e.message);
+      }
+    }
+
     showToast(`Deleted user ${target.fullName}`, 'success');
     return { success: true };
   };
@@ -620,6 +869,50 @@ export function AppProvider({ children }) {
     const hydrateFromSupabase = async () => {
       if (!supabase) return;
       try {
+        // 1. Hydrate User Profiles & Permissions from Supabase
+        const { data: dbProfiles } = await supabase.from('profiles').select('*');
+        if (dbProfiles && dbProfiles.length > 0) {
+          const { data: dbPerms } = await supabase.from('user_page_permissions').select('*');
+
+          setUsersList(prev => {
+            const list = [...(prev || [])];
+            dbProfiles.forEach(dbUser => {
+              const userPerms = dbPerms
+                ? dbPerms.filter(p => p.user_id === dbUser.id).map(p => p.page_id)
+                : [];
+
+              const perms = userPerms.length > 0
+                ? userPerms
+                : (ROLE_PRESETS[dbUser.role] || ROLE_PRESETS.warehouse_staff);
+
+              const existingIdx = list.findIndex(u =>
+                u.id === dbUser.id ||
+                u.email?.toLowerCase() === dbUser.email?.toLowerCase()
+              );
+
+              const mappedUser = {
+                id: dbUser.id,
+                email: dbUser.email,
+                fullName: dbUser.full_name || dbUser.fullName,
+                role: dbUser.role || 'warehouse_staff',
+                siteId: dbUser.site_id || 'site-dc',
+                hasSetPassword: dbUser.has_set_password ?? true,
+                passwordHash: dbUser.password_hash || 'Password123',
+                isActive: dbUser.is_active ?? true,
+                permittedPages: dbUser.role === 'superadmin' ? ROLE_PRESETS.superadmin : perms
+              };
+
+              if (existingIdx >= 0) {
+                list[existingIdx] = { ...list[existingIdx], ...mappedUser };
+              } else {
+                list.push(mappedUser);
+              }
+            });
+            return list;
+          });
+        }
+
+        // 2. Hydrate Parts Catalog from Supabase
         const { data: dbParts } = await supabase.from('parts').select('*');
         if (dbParts && dbParts.length > 0) {
           setParts(prev => {
@@ -629,6 +922,7 @@ export function AppProvider({ children }) {
           });
         }
 
+        // 3. Hydrate Serialized Inventory from Supabase
         const { data: dbInventory } = await supabase.from('inventory_units').select('*');
         if (dbInventory && dbInventory.length > 0) {
           setInventoryUnits(prev => {
