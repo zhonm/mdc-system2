@@ -35,7 +35,7 @@ export const ROLE_PRESETS = {
 const INITIAL_USERS = [
   {
     id: 'usr-superadmin-zhon',
-    email: 'zhon@mobilecare.com.ph',
+    email: 'zhon.manaois@mobilecareph.com',
     fullName: 'Zhon Manaois',
     role: 'superadmin',
     siteId: 'site-dc',
@@ -46,7 +46,7 @@ const INITIAL_USERS = [
   },
   {
     id: 'usr-superadmin-joshua',
-    email: 'joshua@mobilecare.com.ph',
+    email: 'joshua.juvida@mobilecareph.com',
     fullName: 'Joshua Juvida',
     role: 'superadmin',
     siteId: 'site-dc',
@@ -57,7 +57,7 @@ const INITIAL_USERS = [
   },
   {
     id: 'usr-admin',
-    email: 'anjo@mobilecare.com.ph',
+    email: 'anjo.alcazar@mobilecareph.com',
     fullName: 'Anjo Alcazar',
     role: 'admin',
     siteId: 'site-dc',
@@ -68,7 +68,7 @@ const INITIAL_USERS = [
   },
   {
     id: 'usr-warehouse',
-    email: 'warehouse@mobilecare.com.ph',
+    email: 'warehouse@mobilecareph.com',
     fullName: 'Mark Santos',
     role: 'warehouse_staff',
     siteId: 'site-dc',
@@ -79,7 +79,7 @@ const INITIAL_USERS = [
   },
   {
     id: 'usr-sitestaff',
-    email: 'npm.service@mobilecare.com.ph',
+    email: 'npm.service@mobilecareph.com',
     fullName: 'Newpoint Branch Staff',
     role: 'site_staff',
     siteId: 'site-aspnpm',
@@ -90,7 +90,7 @@ const INITIAL_USERS = [
   },
   {
     id: 'usr-firsttime',
-    email: 'newuser@mobilecare.com.ph',
+    email: 'newuser@mobilecareph.com',
     fullName: 'Carlo Reyes (New Hire)',
     role: 'warehouse_staff',
     siteId: 'site-dc',
@@ -100,6 +100,41 @@ const INITIAL_USERS = [
     permittedPages: ROLE_PRESETS.warehouse_staff
   }
 ];
+
+// Helper to normalize and match users across domain variations and aliases
+export const matchUserByEmail = (users, rawInputEmail) => {
+  if (!rawInputEmail || !users || users.length === 0) return null;
+  const input = rawInputEmail.trim().toLowerCase();
+
+  // 1. Exact email match
+  let matched = users.find(u => u.email && u.email.trim().toLowerCase() === input);
+  if (matched) return matched;
+
+  // 2. Extract local part and domain
+  const [inputUser, inputDomain] = input.split('@');
+  if (!inputUser) return null;
+
+  const cleanInputUser = inputUser.replace(/[._-]/g, '');
+
+  matched = users.find(u => {
+    if (!u.email) return false;
+    const [uUser] = u.email.trim().toLowerCase().split('@');
+    const cleanUUser = (uUser || '').replace(/[._-]/g, '');
+
+    if (inputUser === uUser || cleanInputUser === cleanUUser) return true;
+
+    // Recognize name handles
+    const isZhon = (cleanInputUser.includes('zhon') || cleanInputUser.includes('manaois')) && (cleanUUser.includes('zhon') || cleanUUser.includes('manaois'));
+    const isJoshua = (cleanInputUser.includes('joshua') || cleanInputUser.includes('juvida')) && (cleanUUser.includes('joshua') || cleanUUser.includes('juvida'));
+    const isAnjo = (cleanInputUser.includes('anjo') || cleanInputUser.includes('alcazar')) && (cleanUUser.includes('anjo') || cleanUUser.includes('alcazar'));
+    const isCarlo = cleanInputUser.includes('carlo') && cleanUUser.includes('carlo');
+    const isMark = cleanInputUser.includes('mark') && cleanUUser.includes('mark');
+
+    return isZhon || isJoshua || isAnjo || isCarlo || isMark;
+  });
+
+  return matched || null;
+};
 
 export function AppProvider({ children }) {
   // Navigation & UI State with URL Hash & LocalStorage persistence
@@ -152,8 +187,18 @@ export function AppProvider({ children }) {
 
   // --- AUTHENTICATION & ACCESS CONTROL STATE ---
   const [usersList, setUsersList] = useState(() => {
-    const saved = localStorage.getItem('mdc_users');
-    return saved ? JSON.parse(saved) : INITIAL_USERS;
+    try {
+      const saved = localStorage.getItem('mdc_users');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const map = new Map(INITIAL_USERS.map(u => [u.id, u]));
+        parsed.forEach(u => map.set(u.id, { ...map.get(u.id), ...u }));
+        return Array.from(map.values());
+      }
+    } catch (e) {
+      console.warn('Error loading mdc_users:', e);
+    }
+    return INITIAL_USERS;
   });
 
   const [currentUser, setCurrentUser] = useState(() => {
@@ -237,47 +282,47 @@ export function AppProvider({ children }) {
 
   // --- AUTH ACTIONS ---
 
-  // --- AUTH ACTIONS ---
-
   // 1. Verify Company Email during Login
   const verifyLoginEmail = async (rawEmail) => {
     const email = rawEmail.trim().toLowerCase();
 
-    // Check in local state first
-    let user = usersList.find(u => u.email.toLowerCase() === email);
+    // Check in local state using smart alias & domain matching
+    let user = matchUserByEmail(usersList, email);
 
     // If not found in local state, query Supabase profiles
     if (!user && supabase) {
       try {
-        const { data: dbUser } = await supabase
+        const { data: dbProfiles } = await supabase
           .from('profiles')
-          .select('*')
-          .ilike('email', email)
-          .maybeSingle();
+          .select('*');
 
-        if (dbUser) {
-          const { data: dbPerms } = await supabase
-            .from('user_page_permissions')
-            .select('page_id')
-            .eq('user_id', dbUser.id);
+        if (dbProfiles && dbProfiles.length > 0) {
+          const matchedDb = matchUserByEmail(dbProfiles.map(p => ({ ...p, fullName: p.full_name, siteId: p.site_id, hasSetPassword: p.has_set_password, isActive: p.is_active })), email);
 
-          const perms = dbPerms && dbPerms.length > 0
-            ? dbPerms.map(p => p.page_id)
-            : (ROLE_PRESETS[dbUser.role] || ROLE_PRESETS.warehouse_staff);
+          if (matchedDb) {
+            const { data: dbPerms } = await supabase
+              .from('user_page_permissions')
+              .select('page_id')
+              .eq('user_id', matchedDb.id);
 
-          user = {
-            id: dbUser.id,
-            email: dbUser.email,
-            fullName: dbUser.full_name || dbUser.fullName,
-            role: dbUser.role || 'warehouse_staff',
-            siteId: dbUser.site_id || 'site-dc',
-            hasSetPassword: dbUser.has_set_password ?? true,
-            passwordHash: dbUser.password_hash || 'Password123',
-            isActive: dbUser.is_active ?? true,
-            permittedPages: dbUser.role === 'superadmin' ? ROLE_PRESETS.superadmin : perms
-          };
+            const perms = dbPerms && dbPerms.length > 0
+              ? dbPerms.map(p => p.page_id)
+              : (ROLE_PRESETS[matchedDb.role] || ROLE_PRESETS.warehouse_staff);
 
-          setUsersList(prev => [...prev.filter(u => u.id !== user.id && u.email.toLowerCase() !== email), user]);
+            user = {
+              id: matchedDb.id,
+              email: matchedDb.email,
+              fullName: matchedDb.full_name || matchedDb.fullName,
+              role: matchedDb.role || 'warehouse_staff',
+              siteId: matchedDb.site_id || 'site-dc',
+              hasSetPassword: matchedDb.has_set_password ?? true,
+              passwordHash: matchedDb.password_hash || 'Password123',
+              isActive: matchedDb.is_active ?? true,
+              permittedPages: matchedDb.role === 'superadmin' ? ROLE_PRESETS.superadmin : perms
+            };
+
+            setUsersList(prev => [...prev.filter(u => u.id !== user.id), user]);
+          }
         }
       } catch (e) {
         console.warn('Supabase email verification lookup note:', e.message);
@@ -309,39 +354,41 @@ export function AppProvider({ children }) {
   const signInWithPassword = async (rawEmail, password) => {
     const cleanEmail = rawEmail.trim().toLowerCase();
 
-    let user = usersList.find(u => u.email.toLowerCase() === cleanEmail);
+    let user = matchUserByEmail(usersList, cleanEmail);
 
     if (!user && supabase) {
       try {
-        const { data: dbUser } = await supabase
+        const { data: dbProfiles } = await supabase
           .from('profiles')
-          .select('*')
-          .ilike('email', cleanEmail)
-          .maybeSingle();
+          .select('*');
 
-        if (dbUser) {
-          const { data: dbPerms } = await supabase
-            .from('user_page_permissions')
-            .select('page_id')
-            .eq('user_id', dbUser.id);
+        if (dbProfiles && dbProfiles.length > 0) {
+          const matchedDb = matchUserByEmail(dbProfiles.map(p => ({ ...p, fullName: p.full_name, siteId: p.site_id, hasSetPassword: p.has_set_password, isActive: p.is_active })), cleanEmail);
 
-          const perms = dbPerms && dbPerms.length > 0
-            ? dbPerms.map(p => p.page_id)
-            : (ROLE_PRESETS[dbUser.role] || ROLE_PRESETS.warehouse_staff);
+          if (matchedDb) {
+            const { data: dbPerms } = await supabase
+              .from('user_page_permissions')
+              .select('page_id')
+              .eq('user_id', matchedDb.id);
 
-          user = {
-            id: dbUser.id,
-            email: dbUser.email,
-            fullName: dbUser.full_name || dbUser.fullName,
-            role: dbUser.role || 'warehouse_staff',
-            siteId: dbUser.site_id || 'site-dc',
-            hasSetPassword: dbUser.has_set_password ?? true,
-            passwordHash: dbUser.password_hash || 'Password123',
-            isActive: dbUser.is_active ?? true,
-            permittedPages: dbUser.role === 'superadmin' ? ROLE_PRESETS.superadmin : perms
-          };
+            const perms = dbPerms && dbPerms.length > 0
+              ? dbPerms.map(p => p.page_id)
+              : (ROLE_PRESETS[matchedDb.role] || ROLE_PRESETS.warehouse_staff);
 
-          setUsersList(prev => [...prev.filter(u => u.id !== user.id && u.email.toLowerCase() !== cleanEmail), user]);
+            user = {
+              id: matchedDb.id,
+              email: matchedDb.email,
+              fullName: matchedDb.full_name || matchedDb.fullName,
+              role: matchedDb.role || 'warehouse_staff',
+              siteId: matchedDb.site_id || 'site-dc',
+              hasSetPassword: matchedDb.has_set_password ?? true,
+              passwordHash: matchedDb.password_hash || 'Password123',
+              isActive: matchedDb.is_active ?? true,
+              permittedPages: matchedDb.role === 'superadmin' ? ROLE_PRESETS.superadmin : perms
+            };
+
+            setUsersList(prev => [...prev.filter(u => u.id !== user.id), user]);
+          }
         }
       } catch (e) {
         console.warn('Supabase login profile lookup note:', e.message);
@@ -359,7 +406,7 @@ export function AppProvider({ children }) {
     // Try Supabase auth if connected
     try {
       if (supabase) {
-        await supabase.auth.signInWithPassword({ email: cleanEmail, password });
+        await supabase.auth.signInWithPassword({ email: user.email, password });
       }
     } catch (e) {
       // Offline fallback
@@ -379,11 +426,11 @@ export function AppProvider({ children }) {
   };
 
   // 3. First-Time Password Creation
-  const createFirstTimePassword = async (email, newPassword) => {
-    const cleanEmail = email.trim().toLowerCase();
-    const userIndex = usersList.findIndex(u => u.email.toLowerCase() === cleanEmail);
+  const createFirstTimePassword = async (rawEmail, newPassword) => {
+    const cleanEmail = rawEmail.trim().toLowerCase();
+    const user = matchUserByEmail(usersList, cleanEmail);
 
-    if (userIndex === -1) {
+    if (!user) {
       return { success: false, error: 'User profile not found' };
     }
 
@@ -394,21 +441,19 @@ export function AppProvider({ children }) {
         await supabase
           .from('profiles')
           .update({ has_set_password: true, updated_at: new Date().toISOString() })
-          .ilike('email', cleanEmail);
+          .or(`id.eq.${user.id},email.ilike.${user.email}`);
       }
     } catch (e) {
       // Offline mode fallback
     }
 
     const updatedUser = {
-      ...usersList[userIndex],
+      ...user,
       hasSetPassword: true,
       passwordHash: newPassword
     };
 
-    const newUsersList = [...usersList];
-    newUsersList[userIndex] = updatedUser;
-    setUsersList(newUsersList);
+    setUsersList(prev => prev.map(u => (u.id === user.id ? updatedUser : u)));
 
     setPendingFirstTimeUser(null);
     setCurrentUser(updatedUser);
