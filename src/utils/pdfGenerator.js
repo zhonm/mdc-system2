@@ -182,7 +182,7 @@ export function generatePackingListPDF(shipment, items = [], site = {}) {
   doc.setFont('helvetica', 'bold');
   doc.text('Verified by:', margin + 96, sigY + 2);
   doc.setFont('helvetica', 'normal');
-  doc.text(shipment.verified_by_name || 'Anjo Alcazar', margin + 114, sigY + 2);
+  doc.text(shipment.verified_by_name || 'Zhon Manaois', margin + 114, sigY + 2);
 
   // Receiving Branch Signature
   doc.setFont('helvetica', 'bold');
@@ -307,7 +307,7 @@ export function printPackingListDirect(shipment, items = [], site = {}) {
           <div class="sig-line"></div>
         </div>
         <div>
-          <div>Verified by: <strong>${shipment.verified_by_name || 'Anjo Alcazar'}</strong></div>
+          <div>Verified by: <strong>${shipment.verified_by_name || 'Zhon Manaois'}</strong></div>
           <div class="sig-line"></div>
         </div>
       </div>

@@ -86,7 +86,7 @@ export default function ScanOutPacking() {
       total_boxes: 1,
       status: 'draft',
       prepared_by_name: currentUser?.fullName || '',
-      verified_by_name: 'Anjo Alcazar',
+      verified_by_name: 'Zhon Manaois',
       receiving_signature: serviceSites[0]?.code || 'ASP NPM',
       remarks: 'KGB PARTS',
       items: []
@@ -338,7 +338,7 @@ export default function ScanOutPacking() {
       total_boxes: 1,
       status: 'draft',
       prepared_by_name: currentUser?.fullName || '',
-      verified_by_name: 'Anjo Alcazar',
+      verified_by_name: 'Zhon Manaois',
       receiving_signature: selectedSite?.code || 'ASP NPM',
       remarks: 'KGB PARTS',
       items: []
@@ -358,13 +358,10 @@ export default function ScanOutPacking() {
     const toSave = {
       ...currentShipment,
       id: currentShipment.id || `ship-${Date.now()}`,
-      status: 'saved',
-      total_boxes: boxNumber,
-      site_name: selectedSite.name,
-      site_code: selectedSite.code,
+      created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
-    saveShipment(toSave);
+    saveShipmentToHistory(toSave);
     showToast(`Saved Packing List ${toSave.invoice_ref} with ${toSave.items.length} parts permanently to Database History below!`, 'success');
   };
 
@@ -376,14 +373,13 @@ export default function ScanOutPacking() {
     }
     const finalized = {
       ...currentShipment,
+      id: currentShipment.id || `ship-${Date.now()}`,
       status: 'shipped',
-      total_boxes: boxNumber,
-      site_name: selectedSite.name,
-      site_code: selectedSite.code,
+      created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
-    saveShipment(finalized);
-    generatePackingListPDF(finalized, finalized.items, selectedSite);
+    saveShipmentToHistory(finalized);
+    generatePackingListPDF(finalized, finalized.items || [], selectedSite);
     
     // Reset draft for next shipment
     try {
@@ -402,7 +398,7 @@ export default function ScanOutPacking() {
       total_boxes: 1,
       status: 'draft',
       prepared_by_name: currentUser?.fullName || '',
-      verified_by_name: 'Anjo Alcazar',
+      verified_by_name: 'Zhon Manaois',
       receiving_signature: selectedSite?.code || 'ASP NPM',
       remarks: 'KGB PARTS',
       items: []
@@ -572,8 +568,8 @@ export default function ScanOutPacking() {
               type="text"
               className="form-input"
               style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '12px' }}
-              value={currentShipment.verified_by_name ?? 'Anjo Alcazar'}
-              placeholder="e.g. Anjo Alcazar"
+              value={currentShipment.verified_by_name ?? 'Zhon Manaois'}
+              placeholder="e.g. Zhon Manaois"
               onChange={(e) => setCurrentShipment(prev => ({ ...prev, verified_by_name: e.target.value }))}
             />
           </div>
@@ -952,8 +948,8 @@ export default function ScanOutPacking() {
                 type="text"
                 className="packing-inline-input packing-inline-input-left"
                 style={{ width: '160px' }}
-                value={currentShipment.verified_by_name ?? 'Anjo Alcazar'}
-                placeholder="Anjo Alcazar"
+                value={currentShipment.verified_by_name ?? 'Zhon Manaois'}
+                placeholder="Zhon Manaois"
                 title="Click to edit Verified By"
                 onChange={(e) => setCurrentShipment(prev => ({ ...prev, verified_by_name: e.target.value }))}
               />
@@ -1040,7 +1036,7 @@ export default function ScanOutPacking() {
                         </td>
                         <td style={{ fontSize: '11.5px', color: '#475569' }}>
                           <div>By: <strong>{s.prepared_by_name || 'Warehouse Staff'}</strong></div>
-                          <div>Ver: {s.verified_by_name || 'Anjo Alcazar'}</div>
+                          <div>Ver: {s.verified_by_name || 'Zhon Manaois'}</div>
                         </td>
                         <td>
                           <span

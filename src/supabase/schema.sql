@@ -246,7 +246,7 @@ CREATE TABLE IF NOT EXISTS shipments (
     total_boxes INT DEFAULT 1,
     status shipment_status NOT NULL DEFAULT 'draft',
     prepared_by_name TEXT DEFAULT 'Joshua Juvida',
-    verified_by_name TEXT DEFAULT 'Anjo Alcazar',
+    verified_by_name TEXT DEFAULT 'Zhon Manaois',
     receiving_signature TEXT,
     remarks TEXT DEFAULT 'KGB PARTS',
     created_by UUID REFERENCES profiles(id) ON DELETE SET NULL,

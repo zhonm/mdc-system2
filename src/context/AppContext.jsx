@@ -35,7 +35,7 @@ export const ROLE_PRESETS = {
   management_viewer: ['dashboard', 'forecast', 'records', 'allocation', 'shipments', 'reports', 'audit']
 };
 
-// Initial provisioned users for instant testing & demonstration
+// Initial provisioned users (Only Zhon Manaois and Joshua Juvida)
 const INITIAL_USERS = [
   {
     id: 'usr-superadmin-zhon',
@@ -58,51 +58,21 @@ const INITIAL_USERS = [
     passwordHash: 'Password123',
     isActive: true,
     permittedPages: ROLE_PRESETS.superadmin
-  },
-  {
-    id: 'usr-admin',
-    email: 'anjo.alcazar@mobilecareph.com',
-    fullName: 'Anjo Alcazar',
-    role: 'admin',
-    siteId: 'site-dc',
-    hasSetPassword: true,
-    passwordHash: 'Password123',
-    isActive: true,
-    permittedPages: ROLE_PRESETS.admin
-  },
-  {
-    id: 'usr-warehouse',
-    email: 'warehouse@mobilecareph.com',
-    fullName: 'Mark Santos',
-    role: 'warehouse_staff',
-    siteId: 'site-dc',
-    hasSetPassword: true,
-    passwordHash: 'Password123',
-    isActive: true,
-    permittedPages: ROLE_PRESETS.warehouse_staff
-  },
-  {
-    id: 'usr-sitestaff',
-    email: 'npm.service@mobilecareph.com',
-    fullName: 'Newpoint Branch Staff',
-    role: 'site_staff',
-    siteId: 'site-aspnpm',
-    hasSetPassword: true,
-    passwordHash: 'Password123',
-    isActive: true,
-    permittedPages: ROLE_PRESETS.site_staff
-  },
-  {
-    id: 'usr-firsttime',
-    email: 'newuser@mobilecareph.com',
-    fullName: 'Carlo Reyes (New Hire)',
-    role: 'warehouse_staff',
-    siteId: 'site-dc',
-    hasSetPassword: false, // First time login flow trigger!
-    passwordHash: null,
-    isActive: true,
-    permittedPages: ROLE_PRESETS.warehouse_staff
   }
+];
+
+export const LEGACY_MOCK_EMAILS = [
+  'anjo.alcazar@mobilecareph.com',
+  'warehouse@mobilecareph.com',
+  'npm.service@mobilecareph.com',
+  'newuser@mobilecareph.com'
+];
+
+export const LEGACY_MOCK_IDS = [
+  'usr-admin',
+  'usr-warehouse',
+  'usr-sitestaff',
+  'usr-firsttime'
 ];
 
 // Helper to normalize and match users across domain variations and aliases
@@ -130,11 +100,8 @@ export const matchUserByEmail = (users, rawInputEmail) => {
     // Recognize name handles
     const isZhon = (cleanInputUser.includes('zhon') || cleanInputUser.includes('manaois')) && (cleanUUser.includes('zhon') || cleanUUser.includes('manaois'));
     const isJoshua = (cleanInputUser.includes('joshua') || cleanInputUser.includes('juvida')) && (cleanUUser.includes('joshua') || cleanUUser.includes('juvida'));
-    const isAnjo = (cleanInputUser.includes('anjo') || cleanInputUser.includes('alcazar')) && (cleanUUser.includes('anjo') || cleanUUser.includes('alcazar'));
-    const isCarlo = cleanInputUser.includes('carlo') && cleanUUser.includes('carlo');
-    const isMark = cleanInputUser.includes('mark') && cleanUUser.includes('mark');
 
-    return isZhon || isJoshua || isAnjo || isCarlo || isMark;
+    return isZhon || isJoshua;
   });
 
   return matched || null;
@@ -196,10 +163,20 @@ export function AppProvider({ children }) {
       const saved = localStorage.getItem('mdc_users');
       if (saved) {
         const parsed = JSON.parse(saved);
-        return parsed.filter(u => !deletedIds.includes(u.id) && !deletedIds.includes(u.email?.toLowerCase()));
+        return parsed.filter(u =>
+          !deletedIds.includes(u.id) &&
+          !deletedIds.includes(u.email?.toLowerCase()) &&
+          !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+          !LEGACY_MOCK_IDS.includes(u.id)
+        );
       }
       // If no saved state, filter INITIAL_USERS against any deleted IDs
-      return INITIAL_USERS.filter(u => !deletedIds.includes(u.id) && !deletedIds.includes(u.email?.toLowerCase()));
+      return INITIAL_USERS.filter(u =>
+        !deletedIds.includes(u.id) &&
+        !deletedIds.includes(u.email?.toLowerCase()) &&
+        !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+        !LEGACY_MOCK_IDS.includes(u.id)
+      );
     } catch (e) {
       console.warn('Error loading mdc_users:', e);
     }
@@ -1129,11 +1106,29 @@ export function AppProvider({ children }) {
         if (dbProfiles && dbProfiles.length > 0) {
           const { data: dbPerms } = await supabase.from('user_page_permissions').select('*');
 
+          // Clean up any legacy mock profiles from Supabase if found
+          const legacyProfiles = dbProfiles.filter(p =>
+            LEGACY_MOCK_EMAILS.includes(p.email?.toLowerCase()) ||
+            LEGACY_MOCK_IDS.includes(p.id)
+          );
+          if (legacyProfiles.length > 0) {
+            for (const lp of legacyProfiles) {
+              supabase.from('user_page_permissions').delete().eq('user_id', lp.id).then(() => {});
+              supabase.from('profiles').delete().eq('id', lp.id).then(() => {});
+              supabase.from('profiles').delete().ilike('email', lp.email).then(() => {});
+            }
+          }
+
           setUsersList(prev => {
             const list = [...(prev || [])];
             dbProfiles.forEach(dbUser => {
-              if (deletedIds.includes(dbUser.id) || deletedIds.includes(dbUser.email?.toLowerCase())) {
-                return; // Do not re-add deleted users
+              if (
+                deletedIds.includes(dbUser.id) ||
+                deletedIds.includes(dbUser.email?.toLowerCase()) ||
+                LEGACY_MOCK_EMAILS.includes(dbUser.email?.toLowerCase()) ||
+                LEGACY_MOCK_IDS.includes(dbUser.id)
+              ) {
+                return; // Do not re-add deleted or legacy mock users
               }
 
               const userPerms = dbPerms
@@ -1167,7 +1162,12 @@ export function AppProvider({ children }) {
                 list.push(mappedUser);
               }
             });
-            const filtered = list.filter(u => !deletedIds.includes(u.id) && !deletedIds.includes(u.email?.toLowerCase()));
+            const filtered = list.filter(u =>
+              !deletedIds.includes(u.id) &&
+              !deletedIds.includes(u.email?.toLowerCase()) &&
+              !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+              !LEGACY_MOCK_IDS.includes(u.id)
+            );
             try {
               localStorage.setItem('mdc_users', JSON.stringify(filtered));
             } catch (e) {}
@@ -2795,7 +2795,12 @@ export function AppProvider({ children }) {
       // 7. Sync Users
       if (usersList && usersList.length > 0) {
         const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
-        const activeUsers = usersList.filter(u => !deletedIds.includes(u.id) && !deletedIds.includes(u.email?.toLowerCase()));
+        const activeUsers = usersList.filter(u =>
+          !deletedIds.includes(u.id) &&
+          !deletedIds.includes(u.email?.toLowerCase()) &&
+          !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+          !LEGACY_MOCK_IDS.includes(u.id)
+        );
         for (const u of activeUsers) {
           const { data: prof } = await supabase.from('profiles').upsert({
             email: u.email.trim().toLowerCase(),
