@@ -262,19 +262,6 @@ export default function AllocationMatrix() {
             {isOrderRequired ? 'ORDER REQUIRED' : 'NO NEED TO ORDER'}
           </span>
         </td>
-
-        {/* Auto Allocate Trigger */}
-        <td style={{ textAlign: 'center' }}>
-          <button
-            className="btn btn-secondary btn-sm"
-            style={{ fontSize: '11px', padding: '3px 8px', borderColor: '#cbd5e1', color: '#0369a1', fontWeight: 600 }}
-            onClick={() => runAutoAllocation(item.part_id, item.total_allocated_qty || 10)}
-            title="Distribute proportionally using Hamilton-Hare quota allocation"
-          >
-            <Sparkles size={12} color="#0284c7" />
-            <span>Fair Split</span>
-          </button>
-        </td>
       </tr>
     );
   };
@@ -494,9 +481,6 @@ export default function AllocationMatrix() {
                   <th style={{ position: 'sticky', top: 0, background: '#1e293b', color: '#f8fafc', textAlign: 'center', zIndex: 12, minWidth: '140px' }}>
                     Remarks
                   </th>
-                  <th style={{ position: 'sticky', top: 0, background: '#1e293b', color: '#f8fafc', textAlign: 'center', zIndex: 12, minWidth: '95px' }}>
-                    Action
-                  </th>
                 </tr>
               </thead>
 
@@ -505,7 +489,7 @@ export default function AllocationMatrix() {
                 {displayItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
-                      <td colSpan={orderedServiceSites.length + 11}>
+                      <td colSpan={orderedServiceSites.length + 10}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <Smartphone size={16} color="#0284c7" />
                           <span>DISPLAY COMMODITY</span>
@@ -543,7 +527,7 @@ export default function AllocationMatrix() {
                       <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#0369a1', background: '#f0f9ff' }}>{displayTotals.totalW2}</td>
                       <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#0369a1', background: '#f0f9ff' }}>{displayTotals.totalW3}</td>
                       <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#0369a1', background: '#f0f9ff' }}>{displayTotals.totalW4}</td>
-                      <td colSpan={2} style={{ background: '#f0f9ff' }}></td>
+                      <td style={{ background: '#f0f9ff' }}></td>
                     </tr>
                   </>
                 )}
@@ -552,7 +536,7 @@ export default function AllocationMatrix() {
                 {batteryItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
-                      <td colSpan={orderedServiceSites.length + 11}>
+                      <td colSpan={orderedServiceSites.length + 10}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <BatteryCharging size={16} color="#15803d" />
                           <span>BATTERY COMMODITY</span>
@@ -590,7 +574,7 @@ export default function AllocationMatrix() {
                       <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#15803d', background: '#f0fdf4' }}>{batteryTotals.totalW2}</td>
                       <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#15803d', background: '#f0fdf4' }}>{batteryTotals.totalW3}</td>
                       <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#15803d', background: '#f0fdf4' }}>{batteryTotals.totalW4}</td>
-                      <td colSpan={2} style={{ background: '#f0fdf4' }}></td>
+                      <td style={{ background: '#f0fdf4' }}></td>
                     </tr>
                   </>
                 )}
@@ -599,7 +583,7 @@ export default function AllocationMatrix() {
                 {otherItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
-                      <td colSpan={orderedServiceSites.length + 11}>
+                      <td colSpan={orderedServiceSites.length + 10}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <Layers size={16} color="#64748b" />
                           <span>OTHER COMMODITIES</span>
@@ -646,7 +630,6 @@ export default function AllocationMatrix() {
                   <td style={{ textAlign: 'center' }}>
                     <span style={{ fontSize: '9.5px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: '#0284c7', color: '#ffffff' }}>TOTAL PLAN</span>
                   </td>
-                  <td style={{ textAlign: 'center', color: '#64748b', fontSize: '11px' }}>—</td>
                 </tr>
 
                 {/* 2. Total Cost Breakdown per Site Row - FULLY HIGH-CONTRAST & READABLE */}
@@ -676,7 +659,6 @@ export default function AllocationMatrix() {
                   <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W2</td>
                   <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W3</td>
                   <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W4</td>
-                  <td style={{ textAlign: 'center', color: '#64748b', fontSize: '10.5px' }}>—</td>
                   <td style={{ textAlign: 'center', color: '#64748b', fontSize: '10.5px' }}>—</td>
                 </tr>
               </tfoot>

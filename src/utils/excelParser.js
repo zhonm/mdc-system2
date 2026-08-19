@@ -62,8 +62,8 @@ export function isTargetIPhonePart(desc, pn, filterScope = 'IPHONE_13_PLUS_BATTE
   const p = String(pn || '').trim().toLowerCase();
   const combined = `${d} ${p}`;
 
-  // 1. Exclude non-iPhone hardware & non-component consumables
-  if (/ipad|macbook|mac\s|imac|watch|airpod|vision|pencil|top case|enclosure|housing|logic board|flex|speaker|receiver|screw|adhesive|\btray\b|sensor|camera lens|\bsim\s*tray\b|\bsim\s*eject|battery tape|screw kit/i.test(d)) {
+  // 1. Exclude non-iPhone hardware, other commodities (camera, back glass, systems), & consumables
+  if (/ipad|macbook|mac\s|imac|watch|airpod|vision|pencil|top case|enclosure|housing|logic board|flex|speaker|receiver|screw|adhesive|\btray\b|sensor|camera|truedepth|\bglass\b|rear\s*system|mid\s*system|\bsim\s*tray\b|\bsim\s*eject|battery tape|screw kit/i.test(d)) {
     return false;
   }
 
@@ -71,12 +71,10 @@ export function isTargetIPhonePart(desc, pn, filterScope = 'IPHONE_13_PLUS_BATTE
   const isIphone = /iphone/i.test(combined);
   if (!isIphone) return false;
 
-  // 3. Must be Battery, Display, Camera, or Back Glass
+  // 3. Strictly Battery or Display only
   const isBattery = /battery|batt\b/i.test(d);
   const isDisplay = /display|screen|oled|lcd/i.test(d);
-  const isCamera = /camera/i.test(d);
-  const isBackGlass = /back\s*glass|rear\s*system|mid\s*system/i.test(d);
-  if (!isBattery && !isDisplay && !isCamera && !isBackGlass) {
+  if (!isBattery && !isDisplay) {
     return false;
   }
 

@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { calculateLinearRegressionForecast, calculateRecommendedOrder } from '../utils/forecastEngine';
+import { calculateLinearRegressionForecast } from '../utils/forecastEngine';
 import SaveRecordModal from './SaveRecordModal';
-import { Download, Sliders, TrendingUp, Info, UploadCloud, BookmarkPlus } from 'lucide-react';
+import { Download, TrendingUp, UploadCloud, BookmarkPlus } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 export default function Forecasting() {
@@ -15,7 +15,6 @@ export default function Forecasting() {
     showToast
   } = useApp();
 
-  const [safetyBufferPct, setSafetyBufferPct] = useState(5); // 5% default
   const [showSaveModal, setShowSaveModal] = useState(false);
 
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug'];
@@ -39,7 +38,9 @@ export default function Forecasting() {
     const data = filteredItems.map(item => {
       const counts = item.ytd_monthly_counts || [];
       const computed = calculateLinearRegressionForecast(counts, counts.length + 1);
-      const rec = calculateRecommendedOrder(computed, safetyBufferPct / 100, item.admin_override);
+      const finalOrder = item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== ''
+        ? parseInt(item.admin_override)
+        : (item.final_forecast || computed);
 
       const rowObj = {
         'Part Number': item.part_number,
@@ -48,10 +49,9 @@ export default function Forecasting() {
       months.forEach((m, idx) => {
         rowObj[m] = counts[idx] || 0;
       });
-      rowObj['Next Period Forecast'] = computed;
+      rowObj['August Forecast'] = computed;
       rowObj['Admin Override'] = item.admin_override !== null ? item.admin_override : '';
-      rowObj['Safety Stock Units'] = rec.safetyUnits;
-      rowObj['Recommended Order'] = rec.recommendedOrder;
+      rowObj['Final Forecast Order'] = finalOrder;
 
       return rowObj;
     });
@@ -71,30 +71,11 @@ export default function Forecasting() {
           <div>
             <h3>Demand Forecasting Engine</h3>
             <p style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
-              Linear regression ($y = \alpha + \beta x$) computed over historical repair counts with safety stock buffers
+              Linear regression ($y = \alpha + \beta x$) computed over historical repair counts
             </p>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            {/* Safety Stock Slider */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-muted)' }}>
-                Safety Stock Buffer:
-              </span>
-              <input
-                type="range"
-                min="0"
-                max="20"
-                value={safetyBufferPct}
-                onChange={(e) => setSafetyBufferPct(parseInt(e.target.value))}
-                style={{ width: '100px', cursor: 'pointer' }}
-                disabled={filteredItems.length === 0}
-              />
-              <span className="badge badge-primary" style={{ width: '40px', justifyContent: 'center' }}>
-                {safetyBufferPct}%
-              </span>
-            </div>
-
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => setShowSaveModal(true)}
@@ -172,7 +153,6 @@ export default function Forecasting() {
                   </div>
                 </th>
                 <th style={{ textAlign: 'center' }}>Admin Override</th>
-                <th style={{ textAlign: 'center' }}>Buffer ({safetyBufferPct}%)</th>
                 <th style={{ textAlign: 'center', background: '#ecfdf5', color: '#065f46' }}>Recommended Order</th>
               </tr>
             </thead>
@@ -180,8 +160,8 @@ export default function Forecasting() {
               {filteredItems.map(item => {
                 const counts = item.ytd_monthly_counts || [];
                 const computed = calculateLinearRegressionForecast(counts, counts.length + 1);
-                const rec = calculateRecommendedOrder(computed, safetyBufferPct / 100, item.admin_override);
                 const hasOverride = item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== '';
+                const finalOrder = hasOverride ? parseInt(item.admin_override) : (item.final_forecast || computed);
 
                 return (
                   <tr key={item.part_id}>
@@ -204,11 +184,8 @@ export default function Forecasting() {
                         onChange={(e) => updateForecastOverride(item.part_id, e.target.value)}
                       />
                     </td>
-                    <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
-                      +{rec.safetyUnits}
-                    </td>
                     <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', background: '#f0fdf4', color: '#15803d', fontSize: '15px' }}>
-                      {rec.recommendedOrder}
+                      {finalOrder}
                     </td>
                   </tr>
                 );
