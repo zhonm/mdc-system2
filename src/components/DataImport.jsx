@@ -410,27 +410,46 @@ export default function DataImport() {
                   <tr>
                     <th>Part Number</th>
                     <th>Description</th>
-                    <th style={{ textAlign: 'center', background: '#e0f2fe' }}>Total Allocated</th>
-                    <th style={{ textAlign: 'center' }}>Week 1</th>
-                    <th style={{ textAlign: 'center' }}>Week 2</th>
-                    <th style={{ textAlign: 'center' }}>Week 3</th>
-                    <th style={{ textAlign: 'center' }}>Week 4</th>
+                    <th style={{ textAlign: 'right' }}>Stock Price</th>
+                    <th style={{ textAlign: 'center', background: '#e0f2fe' }}>Total Parts</th>
+                    <th style={{ textAlign: 'right', background: '#e0f2fe' }}>Total Cost</th>
+                    <th style={{ textAlign: 'center' }}>W1 Qty</th>
+                    <th style={{ textAlign: 'right' }}>W1 Total</th>
+                    <th style={{ textAlign: 'center' }}>W2 Qty</th>
+                    <th style={{ textAlign: 'right' }}>W2 Total</th>
+                    <th style={{ textAlign: 'center' }}>W3 Qty</th>
+                    <th style={{ textAlign: 'right' }}>W3 Total</th>
+                    <th style={{ textAlign: 'center' }}>W4 Qty</th>
+                    <th style={{ textAlign: 'right' }}>W4 Total</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {parsedData.payload.allocations.map(item => (
-                    <tr key={item.part_id}>
-                      <td className="font-mono"><strong>{item.part_number}</strong></td>
-                      <td>{item.description}</td>
-                      <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--primary)' }}>
-                        {item.total_allocated_qty}
-                      </td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w1_qty}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w2_qty}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w3_qty}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w4_qty}</td>
-                    </tr>
-                  ))}
+                  {parsedData.payload.allocations.map(item => {
+                    const price = item.stocking_price || 0;
+                    const totalQty = item.total_allocated_qty || 0;
+                    const totalCost = item.total_stock_cost || (totalQty * price);
+                    return (
+                      <tr key={item.part_id}>
+                        <td className="font-mono"><strong>{item.part_number}</strong></td>
+                        <td>{item.description}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${price.toFixed(2)}</td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--primary)' }}>
+                          {totalQty}
+                        </td>
+                        <td style={{ textAlign: 'right', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
+                          ${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w1_qty ?? 0}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${(item.w1_cost ?? (item.w1_qty * price) ?? 0).toFixed(2)}</td>
+                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w2_qty ?? 0}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${(item.w2_cost ?? (item.w2_qty * price) ?? 0).toFixed(2)}</td>
+                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w3_qty ?? 0}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${(item.w3_cost ?? (item.w3_qty * price) ?? 0).toFixed(2)}</td>
+                        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{item.w4_qty ?? 0}</td>
+                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${(item.w4_cost ?? (item.w4_qty * price) ?? 0).toFixed(2)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

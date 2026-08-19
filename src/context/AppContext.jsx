@@ -1,9 +1,11 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import seedData from '../data/seedData.json';
+import seedStockTransfers from '../data/seedStockTransfers.json';
 import { calculateLinearRegressionForecast, calculateRecommendedOrder } from '../utils/forecastEngine';
 import { calculateProportionalAllocation, calculateWeeklySplit } from '../utils/allocationEngine';
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { supabase } from '../supabase/client';
+import dbStorage from '../utils/dbStorage';
 
 const AppContext = createContext();
 
@@ -18,6 +20,7 @@ export const ALL_PAGES = [
   { id: 'allocation', label: 'Allocation Matrix', section: 'Warehouse Operations' },
   { id: 'scan-out', label: 'Pack Scan-Out', section: 'Warehouse Operations' },
   { id: 'shipments', label: 'Shipments & Packing Lists', section: 'Distribution' },
+  { id: 'reports', label: 'Stock Transfer Reports', section: 'Reports & Analytics' },
   { id: 'audit', label: 'Serialized Audit Log', section: 'Traceability' },
   { id: 'settings', label: 'Parts & Site Catalog', section: 'Admin' },
   { id: 'user-access', label: 'User Access Management', section: 'Admin' }
@@ -25,11 +28,11 @@ export const ALL_PAGES = [
 
 // Sensible default page permissions per role
 export const ROLE_PRESETS = {
-  superadmin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'allocation', 'scan-out', 'shipments', 'audit', 'settings', 'user-access'],
-  admin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'allocation', 'shipments', 'audit', 'settings'],
-  warehouse_staff: ['dashboard', 'scan-in', 'allocation', 'scan-out', 'shipments'],
-  site_staff: ['dashboard', 'shipments'],
-  management_viewer: ['dashboard', 'forecast', 'records', 'allocation', 'shipments', 'audit']
+  superadmin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'allocation', 'scan-out', 'shipments', 'reports', 'audit', 'settings', 'user-access'],
+  admin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'allocation', 'shipments', 'reports', 'audit', 'settings'],
+  warehouse_staff: ['dashboard', 'scan-in', 'allocation', 'scan-out', 'shipments', 'reports'],
+  site_staff: ['dashboard', 'shipments', 'reports'],
+  management_viewer: ['dashboard', 'forecast', 'records', 'allocation', 'shipments', 'reports', 'audit']
 };
 
 // Initial provisioned users for instant testing & demonstration
@@ -364,7 +367,7 @@ export function AppProvider({ children }) {
   };
 
   // 2. Authenticate Returning User with Password
-  const signInWithPassword = async (rawEmail, password) => {
+  const signInWithPassword = async (rawEmail, password, captchaToken = null) => {
     const cleanEmail = rawEmail.trim().toLowerCase();
 
     let user = matchUserByEmail(usersList, cleanEmail);
@@ -416,13 +419,18 @@ export function AppProvider({ children }) {
       return { success: false, error: 'Account is deactivated' };
     }
 
-    // Try Supabase auth if connected
+    // Try Supabase auth with Turnstile captcha verification if connected
     try {
       if (supabase) {
-        await supabase.auth.signInWithPassword({ email: user.email, password });
+        const authPayload = {
+          email: user.email,
+          password,
+          ...(captchaToken ? { options: { captchaToken } } : {})
+        };
+        await supabase.auth.signInWithPassword(authPayload);
       }
     } catch (e) {
-      // Offline fallback
+      console.warn('Supabase Auth sign-in response:', e?.message || e);
     }
 
     // Verify password (Accepts configured password or default 'Password123')
@@ -835,7 +843,7 @@ export function AppProvider({ children }) {
     return { success: true };
   };
 
-  // --- DATA STORES (Dynamic & Editable with Persistent LocalStorage & Supabase Sync) ---
+  // --- DATA STORES (Dynamic & Editable with Persistent IndexedDB & LocalStorage Sync) ---
   const [categories, setCategories] = useState(() => {
     try {
       const saved = localStorage.getItem('mdc_categories');
@@ -863,66 +871,109 @@ export function AppProvider({ children }) {
     }
   });
 
+  const isExplicitlyCleared = () => {
+    try {
+      return localStorage.getItem('mdc_is_cleared') === 'true';
+    } catch {
+      return false;
+    }
+  };
+
   const [forecastItems, setForecastItems] = useState(() => {
     try {
+      if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_forecast');
-      return saved ? JSON.parse(saved) : (seedData.forecastItems || []);
-    } catch {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
       return seedData.forecastItems || [];
+    } catch {
+      return isExplicitlyCleared() ? [] : (seedData.forecastItems || []);
     }
   });
 
   const [allocations, setAllocations] = useState(() => {
     try {
+      if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_allocations');
-      return saved ? JSON.parse(saved) : (seedData.allocations || []);
-    } catch {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
       return seedData.allocations || [];
+    } catch {
+      return isExplicitlyCleared() ? [] : (seedData.allocations || []);
     }
   });
 
   const [inventoryUnits, setInventoryUnits] = useState(() => {
     try {
+      if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_inventory');
-      return saved ? JSON.parse(saved) : (seedData.inventoryUnits || []);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      return [];
     } catch {
-      return seedData.inventoryUnits || [];
+      return [];
     }
   });
 
   const [purchaseOrders, setPurchaseOrders] = useState(() => {
     try {
+      if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_pos');
-      return saved ? JSON.parse(saved) : (seedData.purchaseOrders || []);
-    } catch {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
       return seedData.purchaseOrders || [];
+    } catch {
+      return isExplicitlyCleared() ? [] : (seedData.purchaseOrders || []);
     }
   });
 
   const [shipments, setShipments] = useState(() => {
     try {
+      if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_shipments');
-      return saved ? JSON.parse(saved) : (seedData.shipments || []);
-    } catch {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
       return seedData.shipments || [];
+    } catch {
+      return isExplicitlyCleared() ? [] : (seedData.shipments || []);
     }
   });
 
   const [scanLogs, setScanLogs] = useState(() => {
     try {
+      if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_scan_logs');
-      return saved ? JSON.parse(saved) : (seedData.scanLogs || []);
-    } catch {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
       return seedData.scanLogs || [];
+    } catch {
+      return isExplicitlyCleared() ? [] : (seedData.scanLogs || []);
     }
   });
 
   const [repairUsageRecords, setRepairUsageRecords] = useState(() => {
     try {
+      if (isExplicitlyCleared()) return [];
       const saved = localStorage.getItem('mdc_repair_usage');
-      return saved ? JSON.parse(saved) : (seedData.repairUsageRecords || []);
-    } catch {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
       return seedData.repairUsageRecords || [];
+    } catch {
+      return isExplicitlyCleared() ? [] : (seedData.repairUsageRecords || []);
     }
   });
 
@@ -935,28 +986,134 @@ export function AppProvider({ children }) {
     }
   });
 
-  // Persistent storage synchronizer with quota protection and error isolation
+  const [stockTransferReports, setStockTransferReports] = useState(() => {
+    try {
+      if (isExplicitlyCleared()) return [];
+      const saved = localStorage.getItem('mdc_stock_transfer_reports');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      return seedStockTransfers || [];
+    } catch {
+      return isExplicitlyCleared() ? [] : (seedStockTransfers || []);
+    }
+  });
+
+  const [stockTransferMetadata, setStockTransferMetadata] = useState(() => {
+    try {
+      if (isExplicitlyCleared()) return null;
+      const saved = localStorage.getItem('mdc_stock_transfer_metadata');
+      if (saved) return JSON.parse(saved);
+      return {
+        fileName: 'Reports – Stock Transfers.xlsx',
+        uploadedAt: new Date().toISOString(),
+        totalRows: seedStockTransfers?.length || 2278,
+        totalQty: 2277,
+        totalVal: 493426,
+        uniqueFromCount: 34,
+        uniqueToCount: 38
+      };
+    } catch {
+      return null;
+    }
+  });
+
+  // Asynchronous IndexedDB Hydration on initial app mount
   useEffect(() => {
-    const safeSet = (key, val) => {
+    let isMounted = true;
+    const hydrateFromIndexedDb = async () => {
       try {
-        localStorage.setItem(key, JSON.stringify(val));
+        const isCleared = await dbStorage.getItem('mdc_is_cleared', false);
+        if (isCleared) {
+          // Explicitly cleared empty state: retain empty arrays
+          return;
+        }
+
+        const [
+          savedForecast,
+          savedAllocs,
+          savedParts,
+          savedSites,
+          savedCats,
+          savedInv,
+          savedPOs,
+          savedShip,
+          savedLogs,
+          savedRepairs,
+          savedRecs,
+          savedTransfers,
+          savedTransferMeta
+        ] = await Promise.all([
+          dbStorage.getItem('mdc_forecast'),
+          dbStorage.getItem('mdc_allocations'),
+          dbStorage.getItem('mdc_parts'),
+          dbStorage.getItem('mdc_sites'),
+          dbStorage.getItem('mdc_categories'),
+          dbStorage.getItem('mdc_inventory'),
+          dbStorage.getItem('mdc_pos'),
+          dbStorage.getItem('mdc_shipments'),
+          dbStorage.getItem('mdc_scan_logs'),
+          dbStorage.getItem('mdc_repair_usage'),
+          dbStorage.getAllSavedRecords(),
+          dbStorage.getItem('mdc_stock_transfer_reports'),
+          dbStorage.getItem('mdc_stock_transfer_metadata')
+        ]);
+
+        if (!isMounted) return;
+
+        if (Array.isArray(savedForecast) && savedForecast.length > 0) setForecastItems(savedForecast);
+        if (Array.isArray(savedAllocs) && savedAllocs.length > 0) setAllocations(savedAllocs);
+        if (Array.isArray(savedParts) && savedParts.length > 0) setParts(savedParts);
+        if (Array.isArray(savedSites) && savedSites.length > 0) {
+          // Enrich any existing cached sites with updated seedData PMG addresses
+          const seedMap = new Map((seedData.sites || []).map(s => [s.code, s]));
+          const enrichedSites = savedSites.map(s => {
+            const seed = seedMap.get(s.code);
+            if (seed && (!s.address || s.address.includes('Service Hub, Philippines') || s.address === 'edi wow')) {
+              return { ...s, ...seed };
+            }
+            return s;
+          });
+          setSites(enrichedSites);
+        } else if (seedData.sites) {
+          setSites(seedData.sites);
+        }
+        if (Array.isArray(savedCats) && savedCats.length > 0) setCategories(savedCats);
+        if (Array.isArray(savedInv) && savedInv.length > 0) setInventoryUnits(savedInv);
+        if (Array.isArray(savedPOs) && savedPOs.length > 0) setPurchaseOrders(savedPOs);
+        if (Array.isArray(savedShip) && savedShip.length > 0) setShipments(savedShip);
+        if (Array.isArray(savedLogs) && savedLogs.length > 0) setScanLogs(savedLogs);
+        if (Array.isArray(savedRepairs) && savedRepairs.length > 0) setRepairUsageRecords(savedRepairs);
+        if (Array.isArray(savedRecs) && savedRecs.length > 0) setSavedRecords(savedRecs);
+        if (Array.isArray(savedTransfers) && savedTransfers.length > 0) setStockTransferReports(savedTransfers);
+        if (savedTransferMeta) setStockTransferMetadata(savedTransferMeta);
       } catch (err) {
-        console.warn(`[LocalStorage] Skipped storing ${key} (${err.message})`);
+        console.warn('[IndexedDB] Hydration notice:', err);
       }
     };
 
-    safeSet('mdc_categories', categories);
-    safeSet('mdc_sites', sites);
-    safeSet('mdc_parts', parts);
-    safeSet('mdc_forecast', forecastItems);
-    safeSet('mdc_allocations', allocations);
-    safeSet('mdc_inventory', inventoryUnits);
-    safeSet('mdc_pos', purchaseOrders);
-    safeSet('mdc_shipments', shipments);
-    safeSet('mdc_scan_logs', (scanLogs || []).slice(0, 300));
-    safeSet('mdc_repair_usage', (repairUsageRecords || []).slice(0, 300));
-    safeSet('mdc_saved_records', (savedRecords || []).slice(0, 50));
-  }, [categories, sites, parts, forecastItems, allocations, inventoryUnits, purchaseOrders, shipments, scanLogs, repairUsageRecords, savedRecords]);
+    hydrateFromIndexedDb();
+    return () => { isMounted = false; };
+  }, []);
+
+  // Continuous Persistence Engine to IndexedDB & LocalStorage
+  useEffect(() => {
+    dbStorage.setItem('mdc_categories', categories);
+    dbStorage.setItem('mdc_sites', sites);
+    dbStorage.setItem('mdc_parts', parts);
+    dbStorage.setItem('mdc_forecast', forecastItems);
+    dbStorage.setItem('mdc_allocations', allocations);
+    dbStorage.setItem('mdc_inventory', inventoryUnits);
+    dbStorage.setItem('mdc_pos', purchaseOrders);
+    dbStorage.setItem('mdc_shipments', shipments);
+    dbStorage.setItem('mdc_scan_logs', scanLogs || []);
+    dbStorage.setItem('mdc_repair_usage', repairUsageRecords || []);
+    dbStorage.setItem('mdc_stock_transfer_reports', stockTransferReports || []);
+    dbStorage.setItem('mdc_stock_transfer_metadata', stockTransferMetadata);
+  }, [categories, sites, parts, forecastItems, allocations, inventoryUnits, purchaseOrders, shipments, scanLogs, repairUsageRecords, stockTransferReports, stockTransferMetadata]);
+
+
 
   // Initial Supabase Hydration check and Realtime Sync on app mount
   useEffect(() => {
@@ -1018,12 +1175,50 @@ export function AppProvider({ children }) {
           });
         }
 
-        // 2. Hydrate Parts Catalog from Supabase
+        // 2. Hydrate Sites & Service Branches from Supabase
+        const { data: dbSites } = await supabase.from('sites').select('*');
+        if (dbSites && dbSites.length > 0) {
+          setSites(prev => {
+            const map = new Map((prev || []).map(s => [s.code, s]));
+            dbSites.forEach(s => {
+              const existing = map.get(s.code);
+              map.set(s.code, {
+                ...(existing || {}),
+                id: s.id || existing?.id,
+                code: s.code,
+                name: s.name || existing?.name,
+                region: s.region || existing?.region || 'Metro Manila',
+                address: s.address || s.full_address || existing?.address,
+                full_address: s.full_address || s.address || existing?.full_address,
+                contact_person: s.contact_person || existing?.contact_person,
+                contact_phone: s.contact_phone || existing?.contact_phone,
+                contact_email: s.contact_email || existing?.contact_email,
+                ship_to: s.ship_to || existing?.ship_to,
+                sold_to: s.sold_to || existing?.sold_to,
+                invoice_prefix: s.invoice_prefix || existing?.invoice_prefix,
+                is_dc: s.is_dc ?? existing?.is_dc ?? false,
+                is_active: s.is_active ?? existing?.is_active ?? true
+              });
+            });
+            const merged = Array.from(map.values());
+            try {
+              localStorage.setItem('mdc_sites', JSON.stringify(merged));
+            } catch (e) {}
+            dbStorage.setItem('mdc_sites', merged);
+            return merged;
+          });
+        }
+
+        // 3. Hydrate Parts Catalog from Supabase
         const { data: dbParts } = await supabase.from('parts').select('*');
         if (dbParts && dbParts.length > 0) {
           setParts(prev => {
-            const map = new Map((prev || []).map(p => [p.part_number, p]));
-            dbParts.forEach(p => map.set(p.part_number, { ...p, ...map.get(p.part_number) }));
+            const getPartKey = (p) => `${p.part_number?.trim().toUpperCase()}:::${(p.description || '').trim().toLowerCase()}`;
+            const map = new Map((prev || []).map(p => [getPartKey(p), p]));
+            dbParts.forEach(p => {
+              const k = getPartKey(p);
+              map.set(k, { ...(map.get(k) || {}), ...p });
+            });
             const merged = Array.from(map.values());
             try {
               localStorage.setItem('mdc_parts', JSON.stringify(merged));
@@ -1037,7 +1232,7 @@ export function AppProvider({ children }) {
           .from('inventory_units')
           .select('*, parts(part_number, description), sites(code, name)');
 
-        if (dbInventory && dbInventory.length > 0) {
+        if (dbInventory && dbInventory.length > 0 && !isExplicitlyCleared()) {
           const mappedUnits = dbInventory.map(dbU => ({
             id: dbU.id,
             part_id: dbU.part_id,
@@ -1089,7 +1284,7 @@ export function AppProvider({ children }) {
         // 5. Hydrate Allocation Items from Supabase
         const { data: dbAllocations } = await supabase
           .from('allocation_items')
-          .select('*, parts(part_number, description), sites(code)');
+          .select('*, parts(part_number, description), sites(id, code)');
 
         if (dbAllocations && dbAllocations.length > 0) {
           const allocMap = new Map();
@@ -1114,14 +1309,18 @@ export function AppProvider({ children }) {
             alloc.w2_qty += item.week2_qty || 0;
             alloc.w3_qty += item.week3_qty || 0;
             alloc.w4_qty += item.week4_qty || 0;
+            const sId = item.sites?.id || item.site_id;
             const sCode = item.sites?.code || item.site_id;
-            alloc.site_quantities[sCode] = item.monthly_allocated_qty || 0;
+            if (sId) alloc.site_quantities[sId] = item.monthly_allocated_qty || 0;
+            if (sCode) alloc.site_quantities[sCode] = item.monthly_allocated_qty || 0;
           });
           const mappedAllocs = Array.from(allocMap.values());
-          setAllocations(mappedAllocs);
-          try {
-            localStorage.setItem('mdc_allocations', JSON.stringify(mappedAllocs));
-          } catch (e) {}
+          if (mappedAllocs.length > 0) {
+            setAllocations(mappedAllocs);
+            try {
+              localStorage.setItem('mdc_allocations', JSON.stringify(mappedAllocs));
+            } catch (e) {}
+          }
         }
 
         // 6. Hydrate Saved Period Records from Supabase
@@ -1207,36 +1406,56 @@ export function AppProvider({ children }) {
     const { type, payload, sheetName } = parsedObj;
 
     try {
+      dbStorage.removeItem('mdc_is_cleared');
+      try { localStorage.removeItem('mdc_is_cleared'); } catch (e) {}
+
       if (type === 'WORKBOOK_BUNDLE') {
         if (payload.sites && payload.sites.length > 0) {
           setSites(payload.sites);
+          dbStorage.setItem('mdc_sites', payload.sites);
         }
         if (payload.parts && payload.parts.length > 0) {
           setParts(prev => {
-            const map = new Map((prev || []).map(p => [p.part_number, p]));
-            payload.parts.forEach(p => map.set(p.part_number, { ...p, ...map.get(p.part_number) }));
-            return Array.from(map.values());
+            const getPartKey = (p) => `${p.part_number?.trim().toUpperCase()}:::${(p.description || '').trim().toLowerCase()}`;
+            const map = new Map((prev || []).map(p => [getPartKey(p), p]));
+            payload.parts.forEach(p => {
+              const k = getPartKey(p);
+              map.set(k, { ...(map.get(k) || {}), ...p });
+            });
+            const merged = Array.from(map.values());
+            dbStorage.setItem('mdc_parts', merged);
+            return merged;
           });
         }
         if (payload.forecastItems && payload.forecastItems.length > 0) {
           setForecastItems(payload.forecastItems);
+          dbStorage.setItem('mdc_forecast', payload.forecastItems);
         }
         if (payload.allocations && payload.allocations.length > 0) {
           setAllocations(payload.allocations);
+          dbStorage.setItem('mdc_allocations', payload.allocations);
         }
         showToast(`Applied ${payload.forecastItems?.length || 0} forecasts and ${payload.allocations?.length || 0} allocations matching your workbook 100%!`, 'success');
         setActiveTab('forecast');
       } else if (type === 'FORECAST') {
         if (payload.parts && payload.parts.length > 0) {
           setParts(prev => {
-            const map = new Map((prev || []).map(p => [p.part_number, p]));
-            payload.parts.forEach(p => map.set(p.part_number, { ...p, ...map.get(p.part_number) }));
-            return Array.from(map.values());
+            const getPartKey = (p) => `${p.part_number?.trim().toUpperCase()}:::${(p.description || '').trim().toLowerCase()}`;
+            const map = new Map((prev || []).map(p => [getPartKey(p), p]));
+            payload.parts.forEach(p => {
+              const k = getPartKey(p);
+              map.set(k, { ...(map.get(k) || {}), ...p });
+            });
+            const merged = Array.from(map.values());
+            dbStorage.setItem('mdc_parts', merged);
+            return merged;
           });
         }
         setForecastItems(payload.forecastItems || []);
+        dbStorage.setItem('mdc_forecast', payload.forecastItems || []);
         if (payload.allocations && payload.allocations.length > 0) {
           setAllocations(payload.allocations);
+          dbStorage.setItem('mdc_allocations', payload.allocations);
         }
         showToast(`Dynamic forecast matrix updated with ${payload.forecastItems?.length || 0} parts and fair allocations from "${sheetName}"!`, 'success');
         setActiveTab('forecast');
@@ -1245,28 +1464,45 @@ export function AppProvider({ children }) {
           setSites(prev => {
             const map = new Map((prev || []).map(s => [s.code, s]));
             payload.sites.forEach(s => map.set(s.code, s));
-            return Array.from(map.values());
+            const merged = Array.from(map.values());
+            dbStorage.setItem('mdc_sites', merged);
+            return merged;
           });
         }
         if (payload.parts && payload.parts.length > 0) {
           setParts(prev => {
-            const map = new Map((prev || []).map(p => [p.part_number, p]));
-            payload.parts.forEach(p => map.set(p.part_number, { ...p, ...map.get(p.part_number) }));
-            return Array.from(map.values());
+            const getPartKey = (p) => `${p.part_number?.trim().toUpperCase()}:::${(p.description || '').trim().toLowerCase()}`;
+            const map = new Map((prev || []).map(p => [getPartKey(p), p]));
+            payload.parts.forEach(p => {
+              const k = getPartKey(p);
+              map.set(k, { ...(map.get(k) || {}), ...p });
+            });
+            const merged = Array.from(map.values());
+            dbStorage.setItem('mdc_parts', merged);
+            return merged;
           });
         }
         setAllocations(payload.allocations || []);
+        dbStorage.setItem('mdc_allocations', payload.allocations || []);
         showToast(`Dynamic Master Allocation updated with ${payload.allocations?.length || 0} parts from "${sheetName}"!`, 'success');
         setActiveTab('allocation');
       } else if (type === 'INVENTORY_STOCK') {
-        setInventoryUnits(prev => [...(payload.units || []), ...(prev || [])]);
+        setInventoryUnits(prev => {
+          const next = [...(payload.units || []), ...(prev || [])];
+          dbStorage.setItem('mdc_inventory', next);
+          return next;
+        });
         if (payload.parts && payload.parts.length > 0) {
           setParts(prev => {
-            const map = new Map((prev || []).map(p => [p.part_number, p]));
+            const getPartKey = (p) => `${p.part_number?.trim().toUpperCase()}:::${(p.description || '').trim().toLowerCase()}`;
+            const map = new Map((prev || []).map(p => [getPartKey(p), p]));
             payload.parts.forEach(p => {
-              if (!map.has(p.part_number)) map.set(p.part_number, p);
+              const k = getPartKey(p);
+              map.set(k, { ...(map.get(k) || {}), ...p });
             });
-            return Array.from(map.values());
+            const merged = Array.from(map.values());
+            dbStorage.setItem('mdc_parts', merged);
+            return merged;
           });
         }
         showToast(`Imported ${payload.units?.length || 0} inventory units!`, 'success');
@@ -1274,27 +1510,44 @@ export function AppProvider({ children }) {
       } else if (type === 'RAW_USAGE_PIPELINE') {
         if (payload.sites && payload.sites.length > 0) {
           setSites(payload.sites);
+          dbStorage.setItem('mdc_sites', payload.sites);
         }
         if (payload.parts && payload.parts.length > 0) {
           setParts(prev => {
-            const map = new Map((prev || []).map(p => [p.part_number, p]));
-            payload.parts.forEach(p => map.set(p.part_number, { ...p, ...map.get(p.part_number) }));
-            return Array.from(map.values());
+            const getPartKey = (p) => `${p.part_number?.trim().toUpperCase()}:::${(p.description || '').trim().toLowerCase()}`;
+            const map = new Map((prev || []).map(p => [getPartKey(p), p]));
+            payload.parts.forEach(p => {
+              const k = getPartKey(p);
+              map.set(k, { ...(map.get(k) || {}), ...p });
+            });
+            const merged = Array.from(map.values());
+            dbStorage.setItem('mdc_parts', merged);
+            return merged;
           });
         }
         if (payload.records && payload.records.length > 0) {
-          setRepairUsageRecords(prev => [...payload.records, ...(prev || [])]);
+          setRepairUsageRecords(prev => {
+            const next = [...payload.records, ...(prev || [])];
+            dbStorage.setItem('mdc_repair_usage', next);
+            return next;
+          });
         }
         if (payload.forecastItems && payload.forecastItems.length > 0) {
           setForecastItems(payload.forecastItems);
+          dbStorage.setItem('mdc_forecast', payload.forecastItems);
         }
         if (payload.allocations && payload.allocations.length > 0) {
           setAllocations(payload.allocations);
+          dbStorage.setItem('mdc_allocations', payload.allocations);
         }
         showToast(`Applied Forecasting & Master Allocation for ${payload.forecastItems?.length || 0} iPhone parts across all sites!`, 'success');
-        setActiveTab('forecast');
+        setActiveTab('allocation');
       } else if (type === 'USAGE_RECORDS') {
-        setRepairUsageRecords(prev => [...(payload.records || []), ...(prev || [])]);
+        setRepairUsageRecords(prev => {
+          const next = [...(payload.records || []), ...(prev || [])];
+          dbStorage.setItem('mdc_repair_usage', next);
+          return next;
+        });
         showToast(`Imported ${payload.records?.length || 0} raw repair usage records!`, 'success');
       }
 
@@ -1309,11 +1562,24 @@ export function AppProvider({ children }) {
   };
 
   const resetToDefaultData = () => {
-    localStorage.removeItem('mdc_forecast');
-    localStorage.removeItem('mdc_allocations');
-    localStorage.removeItem('mdc_inventory');
-    localStorage.removeItem('mdc_pos');
-    localStorage.removeItem('mdc_shipments');
+    dbStorage.removeItem('mdc_is_cleared');
+    dbStorage.setItem('mdc_forecast', seedData.forecastItems);
+    dbStorage.setItem('mdc_allocations', seedData.allocations);
+    dbStorage.setItem('mdc_inventory', seedData.inventoryUnits || []);
+    dbStorage.setItem('mdc_parts', seedData.parts);
+    dbStorage.setItem('mdc_sites', seedData.sites);
+    dbStorage.setItem('mdc_categories', seedData.categories);
+
+    try {
+      localStorage.removeItem('mdc_is_cleared');
+      localStorage.setItem('mdc_forecast', JSON.stringify(seedData.forecastItems));
+      localStorage.setItem('mdc_allocations', JSON.stringify(seedData.allocations));
+      localStorage.setItem('mdc_inventory', JSON.stringify(seedData.inventoryUnits || []));
+      localStorage.setItem('mdc_parts', JSON.stringify(seedData.parts));
+      localStorage.setItem('mdc_sites', JSON.stringify(seedData.sites));
+      localStorage.setItem('mdc_categories', JSON.stringify(seedData.categories));
+    } catch (e) {}
+
     setCategories(seedData.categories);
     setSites(seedData.sites);
     setParts(seedData.parts);
@@ -1351,13 +1617,29 @@ export function AppProvider({ children }) {
   };
 
   const clearAllData = () => {
-    localStorage.removeItem('mdc_forecast');
-    localStorage.removeItem('mdc_allocations');
-    localStorage.removeItem('mdc_inventory');
-    localStorage.removeItem('mdc_pos');
-    localStorage.removeItem('mdc_shipments');
-    localStorage.removeItem('mdc_scan_logs');
-    localStorage.removeItem('mdc_repair_usage');
+    dbStorage.setItem('mdc_is_cleared', true);
+    dbStorage.setItem('mdc_forecast', []);
+    dbStorage.setItem('mdc_allocations', []);
+    dbStorage.setItem('mdc_inventory', []);
+    dbStorage.setItem('mdc_pos', []);
+    dbStorage.setItem('mdc_shipments', []);
+    dbStorage.setItem('mdc_scan_logs', []);
+    dbStorage.setItem('mdc_repair_usage', []);
+
+    try {
+      localStorage.setItem('mdc_is_cleared', 'true');
+      localStorage.setItem('mdc_forecast', '[]');
+      localStorage.setItem('mdc_allocations', '[]');
+      localStorage.setItem('mdc_inventory', '[]');
+      localStorage.setItem('mdc_recent_scans', '[]');
+      localStorage.setItem('mdc_pos', '[]');
+      localStorage.setItem('mdc_shipments', '[]');
+      localStorage.setItem('mdc_scan_logs', '[]');
+      localStorage.setItem('mdc_repair_usage', '[]');
+    } catch (e) {
+      console.warn('LocalStorage clear error:', e);
+    }
+
     setForecastItems([]);
     setAllocations([]);
     setInventoryUnits([]);
@@ -1365,7 +1647,7 @@ export function AppProvider({ children }) {
     setShipments([]);
     setScanLogs([]);
     setRepairUsageRecords([]);
-    showToast('Cleared all operational data. System is now in an empty state.', 'info');
+    showToast('Cleared all operational data (Forecasting, Allocation, and Receive Scan-In). Ready for fresh new stocks!', 'info');
   };
 
   // --- ACTIONS ---
@@ -1418,18 +1700,20 @@ export function AppProvider({ children }) {
       received_by: currentUser?.fullName || 'Warehouse Staff'
     };
 
-    setInventoryUnits(prev => [newUnit, ...prev]);
-
-    // Immediate LocalStorage update
-    try {
-      const updatedInv = [newUnit, ...inventoryUnits];
-      localStorage.setItem('mdc_inventory', JSON.stringify(updatedInv));
-      localStorage.setItem('mdc_parts', JSON.stringify(parts));
-      const currentRecent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
-      localStorage.setItem('mdc_recent_scans', JSON.stringify([newUnit, ...currentRecent].slice(0, 300)));
-    } catch (e) {
-      console.warn('LocalStorage save error:', e);
-    }
+    setInventoryUnits(prev => {
+      const updated = [newUnit, ...(prev || []).filter(u => u.serial_number !== newUnit.serial_number)];
+      try {
+        localStorage.removeItem('mdc_is_cleared');
+        localStorage.setItem('mdc_inventory', JSON.stringify(updated));
+        localStorage.setItem('mdc_parts', JSON.stringify(parts));
+        const currentRecent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
+        const updatedRecent = [newUnit, ...currentRecent.filter(u => u.serial_number !== newUnit.serial_number)].slice(0, 300);
+        localStorage.setItem('mdc_recent_scans', JSON.stringify(updatedRecent));
+      } catch (e) {
+        console.warn('LocalStorage save error:', e);
+      }
+      return updated;
+    });
 
     // Background Supabase Sync
     if (supabase) {
@@ -1599,20 +1883,23 @@ export function AppProvider({ children }) {
       setParts(currentParts);
     }
 
-    setInventoryUnits(prev => [...newUnits, ...prev]);
-
-    // Immediate LocalStorage persistence
-    try {
-      const updatedInv = [...newUnits, ...inventoryUnits];
-      localStorage.setItem('mdc_inventory', JSON.stringify(updatedInv));
-      localStorage.setItem('mdc_parts', JSON.stringify(currentParts));
-      
-      const currentRecent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
-      const newRecent = [...newUnits.map(u => ({ ...u, isImported: true })), ...currentRecent].slice(0, 500);
-      localStorage.setItem('mdc_recent_scans', JSON.stringify(newRecent));
-    } catch (e) {
-      console.warn('LocalStorage save error in batchAddScanInUnits:', e);
-    }
+    setInventoryUnits(prev => {
+      const existingSerialsMap = new Map((prev || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
+      newUnits.forEach(u => existingSerialsMap.set(String(u.serial_number || '').toUpperCase(), u));
+      const updated = Array.from(existingSerialsMap.values());
+      try {
+        localStorage.removeItem('mdc_is_cleared');
+        localStorage.setItem('mdc_inventory', JSON.stringify(updated));
+        localStorage.setItem('mdc_parts', JSON.stringify(currentParts));
+        const currentRecent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
+        const recentMap = new Map(currentRecent.map(u => [String(u.serial_number || '').toUpperCase(), u]));
+        newUnits.forEach(u => recentMap.set(String(u.serial_number || '').toUpperCase(), { ...u, isImported: true }));
+        localStorage.setItem('mdc_recent_scans', JSON.stringify(Array.from(recentMap.values()).slice(0, 500)));
+      } catch (e) {
+        console.warn('LocalStorage batch save error:', e);
+      }
+      return updated;
+    });
 
     // Background Supabase Sync
     if (supabase) {
@@ -1825,10 +2112,58 @@ export function AppProvider({ children }) {
     return { success: true, count: itemsToAdd.length, items: itemsToAdd };
   };
 
-  // 2.2 Clear / Unpack Items from a Specific Shipment Draft
+  // 2.15 Remove single unit from Packing List and return it to DC in_stock inventory
+  const removeScanOutUnit = ({ shipmentId, serialNumber }) => {
+    const cleanSerial = String(serialNumber || '').trim().toUpperCase();
+    if (!cleanSerial) return { success: false };
+
+    let revertedPart = null;
+    const updatedInventory = inventoryUnits.map(u => {
+      if (u.serial_number && u.serial_number.toUpperCase() === cleanSerial) {
+        revertedPart = u;
+        return {
+          ...u,
+          status: 'in_stock',
+          current_site_id: 'site-dc',
+          box_number: 1,
+          shipped_at: null,
+          shipped_by: null
+        };
+      }
+      return u;
+    });
+
+    setInventoryUnits(updatedInventory);
+
+    setShipments(prev => prev.map(sh => {
+      if (sh.id === shipmentId) {
+        return {
+          ...sh,
+          items: (sh.items || []).filter(it => String(it.serial_number || '').toUpperCase() !== cleanSerial)
+        };
+      }
+      return sh;
+    }));
+
+    try {
+      localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory));
+    } catch (e) {
+      console.warn('LocalStorage save error in removeScanOutUnit:', e);
+    }
+
+    showToast(`Removed #${cleanSerial} from packing list. Returned to DC In-Stock inventory.`, 'info');
+    return { success: true, unit: revertedPart };
+  };
+
+  // 2.2 Clear / Unpack Items from a Specific Shipment Draft (Only affects drafts, NEVER saved shipments)
   const clearShipmentDraftItems = (shipmentId) => {
     const targetShipment = shipments.find(s => s.id === shipmentId);
     if (!targetShipment || !targetShipment.items || targetShipment.items.length === 0) {
+      return { success: true, count: 0 };
+    }
+
+    // Safety: If shipment is already saved or shipped in database, DO NOT touch it!
+    if (targetShipment.status !== 'draft') {
       return { success: true, count: 0 };
     }
 
@@ -1849,25 +2184,58 @@ export function AppProvider({ children }) {
       return u;
     });
     setInventoryUnits(updatedInventory);
+    dbStorage.setItem('mdc_inventory', updatedInventory);
 
-    // Empty shipment items
-    setShipments(prev => prev.map(sh => {
-      if (sh.id === shipmentId) {
-        return { ...sh, items: [] };
-      }
-      return sh;
-    }));
+    // Only remove draft from active shipments list
+    const updatedShipments = shipments.filter(s => s.id !== shipmentId);
+    setShipments(updatedShipments);
+    dbStorage.setItem('mdc_shipments', updatedShipments);
 
-    // Immediate LocalStorage save
     try {
       localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory));
+      localStorage.setItem('mdc_shipments', JSON.stringify(updatedShipments));
       localStorage.removeItem('mdc_active_pack_draft');
     } catch (e) {
       console.warn('LocalStorage save error:', e);
     }
 
-    showToast(`Cleared ${serialsToRevert.size} packed items. Units reverted back to In-Stock DC inventory.`, 'info');
+    showToast(`Cleared ${serialsToRevert.size} packed items from draft. Units reverted back to In-Stock DC inventory.`, 'info');
     return { success: true, count: serialsToRevert.size };
+  };
+
+  // 2.2b Explicit Delete of a Saved Shipment from Database History
+  const deleteShipment = (shipmentId) => {
+    const target = shipments.find(s => s.id === shipmentId);
+    if (!target) return { success: false, error: 'Shipment not found' };
+
+    // Revert packed items back to in_stock if not yet delivered
+    if (target.items && target.items.length > 0 && target.status !== 'delivered') {
+      const serialsToRevert = new Set(target.items.map(it => it.serial_number.toUpperCase()));
+      const updatedInventory = inventoryUnits.map(u => {
+        if (serialsToRevert.has(u.serial_number.toUpperCase())) {
+          return {
+            ...u,
+            status: 'in_stock',
+            current_site_id: 'site-dc',
+            box_number: 1,
+            shipped_at: null,
+            shipped_by: null
+          };
+        }
+        return u;
+      });
+      setInventoryUnits(updatedInventory);
+      dbStorage.setItem('mdc_inventory', updatedInventory);
+      try { localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory)); } catch (e) {}
+    }
+
+    const nextList = shipments.filter(s => s.id !== shipmentId);
+    setShipments(nextList);
+    dbStorage.setItem('mdc_shipments', nextList);
+    try { localStorage.setItem('mdc_shipments', JSON.stringify(nextList)); } catch (e) {}
+
+    showToast(`Deleted manifest ${target.invoice_ref || target.shipment_number} from database`, 'info');
+    return { success: true };
   };
 
   // 2.3 Batch Import Shipments / Manifests
@@ -1967,23 +2335,40 @@ export function AppProvider({ children }) {
     }));
   };
 
-  const updateSiteAllocation = (partId, siteId, newQty) => {
+  const updateSiteAllocation = (partId, siteIdOrCode, newQty) => {
     setAllocations(prev => prev.map(item => {
-      if (item.part_id === partId) {
+      if (item.part_id === partId || item.part_number === partId) {
+        const foundSite = sites.find(s => s.id === siteIdOrCode || s.code === siteIdOrCode);
+        const sId = foundSite?.id || siteIdOrCode;
+        const sCode = foundSite?.code || siteIdOrCode;
+        const val = Math.max(0, parseInt(newQty) || 0);
+
         const updatedSiteQty = {
-          ...item.site_quantities,
-          [siteId]: Math.max(0, parseInt(newQty) || 0)
+          ...(item.site_quantities || {}),
+          [sId]: val,
+          ...(sCode ? { [sCode]: val } : {})
         };
-        const newTotal = Object.values(updatedSiteQty).reduce((a, b) => a + b, 0);
-        const split = calculateWeeklySplit(newTotal, 0);
+
+        const activeServiceSites = (sites || []).filter(s => !s.is_dc);
+        const newTotal = activeServiceSites.reduce((sum, s) => {
+          return sum + (updatedSiteQty[s.id] ?? updatedSiteQty[s.code] ?? 0);
+        }, 0);
+
+        const totalCost = newTotal * (item.stocking_price || 0);
+        const split = calculateWeeklySplit(newTotal, totalCost);
         return {
           ...item,
           site_quantities: updatedSiteQty,
           total_allocated_qty: newTotal,
-          w1_qty: split.week1,
-          w2_qty: split.week2,
-          w3_qty: split.week3,
-          w4_qty: split.week4
+          total_stock_cost: totalCost,
+          w1_qty: split.w1_qty,
+          w2_qty: split.w2_qty,
+          w3_qty: split.w3_qty,
+          w4_qty: split.w4_qty,
+          w1_cost: split.w1_cost,
+          w2_cost: split.w2_cost,
+          w3_cost: split.w3_cost,
+          w4_cost: split.w4_cost
         };
       }
       return item;
@@ -2009,7 +2394,8 @@ export function AppProvider({ children }) {
       siteQuantities[res.siteId] = res.allocatedQty;
     });
 
-    const split = calculateWeeklySplit(availableStock, 0);
+    const totalCost = availableStock * (part.stocking_price || 0);
+    const split = calculateWeeklySplit(availableStock, totalCost);
 
     setAllocations(prev => {
       const exists = prev.some(a => a.part_id === partId);
@@ -2017,11 +2403,19 @@ export function AppProvider({ children }) {
         part_id: partId,
         part_number: part.part_number,
         description: part.description,
+        category_id: part.category_id,
+        stocking_price: part.stocking_price,
+        exchange_price: part.exchange_price,
         total_allocated_qty: availableStock,
-        w1_qty: split.week1,
-        w2_qty: split.week2,
-        w3_qty: split.week3,
-        w4_qty: split.week4,
+        total_stock_cost: totalCost,
+        w1_qty: split.w1_qty,
+        w2_qty: split.w2_qty,
+        w3_qty: split.w3_qty,
+        w4_qty: split.w4_qty,
+        w1_cost: split.w1_cost,
+        w2_cost: split.w2_cost,
+        w3_cost: split.w3_cost,
+        w4_cost: split.w4_cost,
         site_quantities: siteQuantities
       };
       if (exists) {
@@ -2034,18 +2428,124 @@ export function AppProvider({ children }) {
   };
 
   const savePart = (partData) => {
-    if (partData.id) {
-      setParts(prev => prev.map(p => p.id === partData.id ? partData : p));
-      showToast(`Updated part ${partData.part_number}`, 'success');
-    } else {
-      const newPart = {
-        ...partData,
-        id: `part-${partData.part_number || Date.now()}`,
-        is_active: true
-      };
-      setParts(prev => [...prev, newPart]);
-      showToast(`Added part ${newPart.part_number} to catalog`, 'success');
+    const cleanPN = String(partData.part_number || '').trim().toUpperCase();
+    const cleanDesc = String(partData.description || '').trim();
+    if (!cleanPN) return { success: false, error: 'Missing part number' };
+
+    setParts(prev => {
+      let updated = [];
+      // Match by explicit unique ID first, or by BOTH part_number AND description
+      const matchIndex = prev.findIndex(p =>
+        (partData.id && p.id === partData.id) ||
+        (p.part_number?.toUpperCase() === cleanPN && p.description?.trim().toLowerCase() === cleanDesc.toLowerCase())
+      );
+
+      if (matchIndex >= 0) {
+        const existing = prev[matchIndex];
+        const updatedPart = {
+          ...existing,
+          ...partData,
+          id: existing.id || partData.id || `part-${cleanPN}-${Date.now()}`,
+          part_number: cleanPN,
+          description: cleanDesc || existing.description,
+          iphone_model: partData.iphone_model?.trim() || existing.iphone_model || 'iPhone',
+          stocking_price: parseFloat(partData.stocking_price) || 0,
+          exchange_price: parseFloat(partData.exchange_price) || 0,
+          updated_at: new Date().toISOString()
+        };
+        updated = [...prev];
+        updated[matchIndex] = updatedPart;
+      } else {
+        const newPart = {
+          ...partData,
+          id: partData.id || `part-${cleanPN}-${Math.random().toString(36).substring(2, 8)}`,
+          part_number: cleanPN,
+          description: cleanDesc || `Part (${cleanPN})`,
+          iphone_model: partData.iphone_model?.trim() || 'iPhone',
+          category_id: partData.category_id || 'cat-battery',
+          stocking_price: parseFloat(partData.stocking_price) || 0,
+          exchange_price: parseFloat(partData.exchange_price) || 0,
+          is_active: partData.is_active ?? true,
+          created_at: new Date().toISOString()
+        };
+        updated = [newPart, ...prev];
+      }
+
+      try {
+        localStorage.setItem('mdc_parts', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage save error in savePart:', e);
+      }
+
+      return updated;
+    });
+
+    // Background Supabase sync
+    if (supabase) {
+      (async () => {
+        try {
+          await supabase.from('parts').upsert({
+            ...(partData.id && !partData.id.startsWith('part-') ? { id: partData.id } : {}),
+            part_number: cleanPN,
+            description: cleanDesc,
+            iphone_model: partData.iphone_model || 'iPhone',
+            stocking_price: parseFloat(partData.stocking_price) || 0,
+            is_active: partData.is_active ?? true
+          });
+        } catch (e) {
+          console.warn('Supabase part save note:', e.message);
+        }
+      })();
     }
+
+    showToast(`Saved part ${cleanPN} (${cleanDesc || 'Standard'}) in catalog`, 'success');
+    return { success: true };
+  };
+
+  const deletePart = (partIdOrObj) => {
+    let deletedPart = null;
+    setParts(prev => {
+      let targetId = typeof partIdOrObj === 'object' ? partIdOrObj.id : partIdOrObj;
+      let targetPN = typeof partIdOrObj === 'object' ? partIdOrObj.part_number : null;
+      let targetDesc = typeof partIdOrObj === 'object' ? partIdOrObj.description : null;
+
+      const match = prev.find(p =>
+        (targetId && p.id === targetId) ||
+        (targetPN && targetDesc && p.part_number === targetPN && p.description === targetDesc) ||
+        (!targetDesc && targetPN && p.part_number === targetPN)
+      );
+
+      if (!match) return prev;
+      deletedPart = match;
+      const updated = prev.filter(p => p.id !== match.id);
+
+      try {
+        localStorage.setItem('mdc_parts', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('LocalStorage save error in deletePart:', e);
+      }
+
+      return updated;
+    });
+
+    if (deletedPart) {
+      if (supabase) {
+        (async () => {
+          try {
+            if (deletedPart.id && !deletedPart.id.startsWith('part-')) {
+              await supabase.from('parts').delete().eq('id', deletedPart.id);
+            } else {
+              await supabase.from('parts').delete().match({ part_number: deletedPart.part_number, description: deletedPart.description });
+            }
+          } catch (e) {
+            console.warn('Supabase part delete note:', e.message);
+          }
+        })();
+      }
+      showToast(`Deleted part ${deletedPart.part_number} (${deletedPart.description}) from catalog`, 'info');
+      return { success: true, part: deletedPart };
+    }
+    return { success: false, error: 'Part not found' };
   };
 
   const saveSite = (siteData) => {
@@ -2061,6 +2561,69 @@ export function AppProvider({ children }) {
       setSites(prev => [...prev, newSite]);
       showToast(`Added site ${newSite.name}`, 'success');
     }
+  };
+
+  const refreshSitesFromCloud = async () => {
+    if (!supabase) {
+      // If no Supabase connection, apply seed data directory directly
+      applyPmgDirectoryToSites();
+      return;
+    }
+    try {
+      showToast('Fetching latest site addresses from Supabase...', 'info');
+      const { data: dbSites, error } = await supabase.from('sites').select('*');
+      if (error) throw error;
+
+      if (dbSites && dbSites.length > 0) {
+        setSites(prev => {
+          const map = new Map((prev || []).map(s => [s.code, s]));
+          dbSites.forEach(s => {
+            const existing = map.get(s.code);
+            map.set(s.code, {
+              ...(existing || {}),
+              id: s.id || existing?.id,
+              code: s.code,
+              name: s.name || existing?.name,
+              region: s.region || existing?.region || 'Metro Manila',
+              address: s.address || s.full_address || existing?.address,
+              full_address: s.full_address || s.address || existing?.full_address,
+              contact_person: s.contact_person || existing?.contact_person,
+              contact_phone: s.contact_phone || existing?.contact_phone,
+              contact_email: s.contact_email || existing?.contact_email,
+              ship_to: s.ship_to || existing?.ship_to,
+              sold_to: s.sold_to || existing?.sold_to,
+              invoice_prefix: s.invoice_prefix || existing?.invoice_prefix,
+              is_dc: s.is_dc ?? existing?.is_dc ?? false,
+              is_active: s.is_active ?? existing?.is_active ?? true
+            });
+          });
+          const merged = Array.from(map.values());
+          try { localStorage.setItem('mdc_sites', JSON.stringify(merged)); } catch (e) {}
+          dbStorage.setItem('mdc_sites', merged);
+          return merged;
+        });
+        showToast(`Successfully refreshed ${dbSites.length} sites from cloud database!`, 'success');
+      } else {
+        applyPmgDirectoryToSites();
+      }
+    } catch (err) {
+      console.warn('Supabase site fetch error:', err);
+      applyPmgDirectoryToSites();
+    }
+  };
+
+  const applyPmgDirectoryToSites = () => {
+    const seedMap = new Map((seedData.sites || []).map(s => [s.code, s]));
+    setSites(prev => {
+      const updated = (prev || []).map(s => {
+        const seed = seedMap.get(s.code);
+        return seed ? { ...s, ...seed } : s;
+      });
+      try { localStorage.setItem('mdc_sites', JSON.stringify(updated)); } catch (e) {}
+      dbStorage.setItem('mdc_sites', updated);
+      return updated;
+    });
+    showToast('Applied PMG Directory addresses to all branches!', 'success');
   };
 
   const syncAllDataToCloud = async () => {
@@ -2336,8 +2899,9 @@ export function AppProvider({ children }) {
       updated_at: new Date().toISOString()
     };
 
-    // 4. Update Local State immediately
+    // 4. Update Local State immediately & persist permanently to IndexedDB
     setSavedRecords(prev => [newRecord, ...prev]);
+    dbStorage.putSavedRecord(newRecord);
 
     try {
       const currentSaved = [newRecord, ...savedRecords].slice(0, 50);
@@ -2371,7 +2935,7 @@ export function AppProvider({ children }) {
       })();
     }
 
-    showToast(`Saved period record: "${newRecord.period_label}"`, 'success');
+    showToast(`Saved period record: "${newRecord.period_label}" permanently to database`, 'success');
     return { success: true, record: newRecord };
   };
 
@@ -2383,6 +2947,9 @@ export function AppProvider({ children }) {
       return { success: false, error: 'Record not found' };
     }
 
+    dbStorage.removeItem('mdc_is_cleared');
+    try { localStorage.removeItem('mdc_is_cleared'); } catch (e) {}
+
     const snap = record.snapshot_data || {};
 
     // 1. Safely merge any missing parts from the snapshot catalog
@@ -2393,6 +2960,7 @@ export function AppProvider({ children }) {
           if (!map.has(p.part_number)) map.set(p.part_number, p);
         });
         const merged = Array.from(map.values());
+        dbStorage.setItem('mdc_parts', merged);
         try { localStorage.setItem('mdc_parts', JSON.stringify(merged)); } catch (e) {}
         return merged;
       });
@@ -2406,6 +2974,7 @@ export function AppProvider({ children }) {
           if (!map.has(s.code)) map.set(s.code, s);
         });
         const merged = Array.from(map.values());
+        dbStorage.setItem('mdc_sites', merged);
         try { localStorage.setItem('mdc_sites', JSON.stringify(merged)); } catch (e) {}
         return merged;
       });
@@ -2416,6 +2985,7 @@ export function AppProvider({ children }) {
     // 3. Restore Forecast items if requested & present
     if (options.restoreForecast && snap.forecastItems && snap.forecastItems.length > 0) {
       setForecastItems(snap.forecastItems);
+      dbStorage.setItem('mdc_forecast', snap.forecastItems);
       try {
         localStorage.setItem('mdc_forecast', JSON.stringify(snap.forecastItems));
       } catch (e) {}
@@ -2425,6 +2995,7 @@ export function AppProvider({ children }) {
     // 4. Restore Allocations if requested & present
     if (options.restoreAllocation && snap.allocations && snap.allocations.length > 0) {
       setAllocations(snap.allocations);
+      dbStorage.setItem('mdc_allocations', snap.allocations);
       try {
         localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations));
       } catch (e) {}
@@ -2457,6 +3028,7 @@ export function AppProvider({ children }) {
 
     const nextList = savedRecords.filter(r => r.id !== recordId);
     setSavedRecords(nextList);
+    dbStorage.deleteSavedRecord(recordId);
 
     try {
       localStorage.setItem('mdc_saved_records', JSON.stringify(nextList.slice(0, 50)));
@@ -2474,6 +3046,28 @@ export function AppProvider({ children }) {
 
     showToast(`Permanently deleted record "${record.period_label}"`, 'info');
     return { success: true };
+  };
+
+  // 4. Import Stock Transfers Report
+  const importStockTransfersReport = async (records, metadata) => {
+    setStockTransferReports(records);
+    setStockTransferMetadata(metadata);
+    await Promise.all([
+      dbStorage.setItem('mdc_stock_transfer_reports', records),
+      dbStorage.setItem('mdc_stock_transfer_metadata', metadata)
+    ]);
+    showToast(`Successfully imported ${records.length.toLocaleString()} stock transfer records`, 'success');
+  };
+
+  // 5. Clear Stock Transfers Report
+  const clearStockTransfersReport = async () => {
+    setStockTransferReports([]);
+    setStockTransferMetadata(null);
+    await Promise.all([
+      dbStorage.setItem('mdc_stock_transfer_reports', []),
+      dbStorage.setItem('mdc_stock_transfer_metadata', null)
+    ]);
+    showToast('Cleared stock transfer reports data', 'info');
   };
 
   return (
@@ -2511,19 +3105,28 @@ export function AppProvider({ children }) {
         forecastItems,
         allocations,
         inventoryUnits,
+        setInventoryUnits,
         purchaseOrders,
         shipments,
         scanLogs,
         repairUsageRecords,
         savedRecords,
+        stockTransferReports,
+        setStockTransferReports,
+        stockTransferMetadata,
+        setStockTransferMetadata,
+        importStockTransfersReport,
+        clearStockTransfersReport,
         savePeriodRecord,
         restorePeriodRecord,
         deletePeriodRecord,
         addScanInUnit,
         batchAddScanInUnits,
         addScanOutUnit,
+        removeScanOutUnit,
         batchAddScanOutUnits,
         clearShipmentDraftItems,
+        deleteShipment,
         batchImportShipments,
         clearAllShipmentsData,
         saveShipment,
@@ -2531,7 +3134,10 @@ export function AppProvider({ children }) {
         updateSiteAllocation,
         runAutoAllocation,
         savePart,
+        deletePart,
         saveSite,
+        refreshSitesFromCloud,
+        applyPmgDirectoryToSites,
         applyParsedDataset,
         syncAllDataToCloud,
         resetToDefaultData,

@@ -70,7 +70,7 @@ export default function Login() {
     setIsLoading(true);
 
     try {
-      const res = await signInWithPassword(emailInput, passwordInput);
+      const res = await signInWithPassword(emailInput, passwordInput, turnstileToken);
       if (!res.success) {
         setErrorMessage(res.error);
       }

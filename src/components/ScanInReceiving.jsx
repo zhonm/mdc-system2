@@ -28,6 +28,7 @@ export default function ScanInReceiving() {
     purchaseOrders,
     parts,
     inventoryUnits,
+    setInventoryUnits,
     showToast
   } = useApp();
 
@@ -36,35 +37,29 @@ export default function ScanInReceiving() {
   const [serialInput, setSerialInput] = useState('');
   const [scanResult, setScanResult] = useState(null); // { type: 'success' | 'error', message: '' }
 
-  // Persistent Recent Scans state
+  // Recent scans state for current scanning session
   const [sessionScans, setSessionScans] = useState(() => {
-    try {
-      const saved = localStorage.getItem('mdc_recent_scans');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch (e) {
-      console.warn('Could not read mdc_recent_scans:', e);
-    }
-    // Fallback: take latest items from inventoryUnits
-    return (inventoryUnits || []).slice(0, 100);
+    return (inventoryUnits || []).slice(0, 50);
   });
 
-  // Keep sessionScans in sync with inventoryUnits updates
+  // Keep sessionScans synchronized with incoming scanned inventoryUnits
   useEffect(() => {
-    if ((!sessionScans || sessionScans.length === 0) && inventoryUnits && inventoryUnits.length > 0) {
-      setSessionScans(inventoryUnits.slice(0, 100));
+    if (!inventoryUnits || inventoryUnits.length === 0) {
+      setSessionScans([]);
+      try {
+        localStorage.removeItem('mdc_recent_scans');
+      } catch (e) {}
+    } else {
+      setSessionScans(prev => {
+        const map = new Map((prev || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
+        inventoryUnits.forEach(u => {
+          const s = String(u.serial_number || '').toUpperCase();
+          if (!map.has(s)) map.set(s, u);
+        });
+        return Array.from(map.values()).slice(0, 100);
+      });
     }
   }, [inventoryUnits]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('mdc_recent_scans', JSON.stringify((sessionScans || []).slice(0, 500)));
-    } catch (e) {
-      console.warn('Could not save mdc_recent_scans:', e);
-    }
-  }, [sessionScans]);
 
   // View & Filter States for Table
   const [activeTableView, setActiveTableView] = useState('ALL_DC_STOCK'); // 'ALL_DC_STOCK' | 'SESSION_SCANS'
@@ -259,9 +254,17 @@ export default function ScanInReceiving() {
     return true;
   });
 
+  // Filter for currently available IN-STOCK units in DC (packed/shipped units are automatically deducted)
+  const availableInStockUnits = useMemo(() => {
+    return (inventoryUnits || []).filter(u => u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc'));
+  }, [inventoryUnits]);
+
   // Table items calculation
   const displayedUnits = useMemo(() => {
-    let sourceList = activeTableView === 'ALL_DC_STOCK' ? inventoryUnits : sessionScans;
+    let sourceList = activeTableView === 'ALL_DC_STOCK'
+      ? availableInStockUnits
+      : sessionScans.filter(u => u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc') || activeTableView === 'SESSION_SCANS');
+
     if (!sourceList) sourceList = [];
 
     if (!tableSearch.trim()) return sourceList;
@@ -272,7 +275,7 @@ export default function ScanInReceiving() {
       (u.serial_number && u.serial_number.toLowerCase().includes(q)) ||
       (u.description && u.description.toLowerCase().includes(q))
     );
-  }, [activeTableView, inventoryUnits, sessionScans, tableSearch]);
+  }, [activeTableView, availableInStockUnits, sessionScans, tableSearch]);
 
   const handleClearSessionHistory = () => {
     setSessionScans([]);
@@ -308,7 +311,7 @@ export default function ScanInReceiving() {
               color: '#38bdf8'
             }}>
               <Database size={13} />
-              <span>DC Stock: <strong>{inventoryUnits.length} units</strong></span>
+              <span>DC Stock: <strong>{availableInStockUnits.length} units</strong></span>
             </div>
 
             <button
@@ -452,7 +455,7 @@ export default function ScanInReceiving() {
               </span>
             </div>
             <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
-              Total DC In-Stock Units: <strong>{inventoryUnits.length}</strong> • Recent Session Intake: <strong>{sessionScans.length}</strong>
+              Total DC In-Stock Units: <strong>{availableInStockUnits.length}</strong> • Recent Session Intake: <strong>{sessionScans.length}</strong>
             </p>
           </div>
 
@@ -464,7 +467,7 @@ export default function ScanInReceiving() {
                 onClick={() => setActiveTableView('ALL_DC_STOCK')}
                 style={{ padding: '4px 10px', fontSize: '12px', borderRadius: '4px' }}
               >
-                All DC Stock ({inventoryUnits.length})
+                All DC Stock ({availableInStockUnits.length})
               </button>
               <button
                 className={`btn btn-sm ${activeTableView === 'SESSION_SCANS' ? 'btn-primary' : 'btn-secondary'}`}

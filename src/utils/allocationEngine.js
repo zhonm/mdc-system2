@@ -73,21 +73,77 @@ export function calculateProportionalAllocation(totalReceivedQty, siteDemands = 
 }
 
 /**
+ * Calculates 2D Cumulative Box Quota Allocation matching Google Sheets / Excel:
+ * =IF($C{row}<=0, 0, MAX(0, ROUND($C{row} * SUM($H${startRow}:Col{shareRow}), 0) - ROUND($C{row} * (SUM($H${startRow}:Col{shareRow}) - Col{shareRow}), 0)))
+ *
+ * @param {number} forecastQty - Monthly forecasted units for this model
+ * @param {number[][]} shareMatrix - 2D matrix of branch shares [row][col]
+ * @param {number} matrixRowIdx - Zero-based index of this model in shareMatrix
+ * @returns {number[]} Array of integer allocated units per branch
+ */
+export function calculate2DCumulativeAllocation(forecastQty, shareMatrix, matrixRowIdx) {
+  if (!shareMatrix || shareMatrix.length === 0 || matrixRowIdx < 0 || matrixRowIdx >= shareMatrix.length) {
+    return [];
+  }
+
+  const numCols = shareMatrix[0].length;
+  if (forecastQty <= 0) {
+    return new Array(numCols).fill(0);
+  }
+
+  const result = [];
+  let currentBoxSum = 0;
+
+  for (let c = 0; c < numCols; c++) {
+    // Sum bounding box from row 0..matrixRowIdx and col 0..c
+    let boxSum = 0;
+    for (let r = 0; r <= matrixRowIdx; r++) {
+      for (let col = 0; col <= c; col++) {
+        boxSum += (shareMatrix[r]?.[col] || 0);
+      }
+    }
+
+    const cellVal = shareMatrix[matrixRowIdx]?.[c] || 0;
+    const prevBoxSum = boxSum - cellVal;
+
+    const alloc = Math.max(
+      0,
+      Math.round(forecastQty * boxSum) - Math.round(forecastQty * prevBoxSum)
+    );
+    result.push(alloc);
+  }
+
+  return result;
+}
+
+/**
  * Calculates 4-Week Split matching verified Excel formula:
- * =LET(p, AI, b, INT(p/4), rem, MOD(p, 4), dir, ISEVEN(ROW()),
- *      w1, b + IF(dir, IF(rem>=1, 1, 0), 0),
- *      w2, b + IF(dir, IF(rem>=2, 1, 0), IF(rem=3, 1, 0)),
- *      w3, b + IF(dir, IF(rem=3, 1, 0), IF(rem>=2, 1, 0)),
- *      w4, p - w1 - w2 - w3,
- *      [w1, w2, w3, w4])
+ * =LET(p, AI, c, AJ, uc, IF(p>0, c/p, 0), b, INT(p/4), rem, MOD(p, 4), dir, ISEVEN(ROW()),
+ *      w1p, b + IF(dir, IF(rem>=1, 1, 0), 0),
+ *      w2p, b + IF(dir, IF(rem>=2, 1, 0), IF(rem=3, 1, 0)),
+ *      w3p, b + IF(dir, IF(rem=3, 1, 0), IF(rem>=2, 1, 0)),
+ *      w4p, p - w1p - w2p - w3p,
+ *      w1c, w1p * uc, w2c, w2p * uc, w3c, w3p * uc, w4c, c - w1c - w2c - w3c,
+ *      [w1p, w1c, w2p, w2c, w3p, w3c, w4p, w4c])
  *
  * @param {number} totalQty - Total monthly quantity allocated to a site
- * @param {number} rowIndex - Row index for alternating direction parity
- * @returns {{week1: number, week2: number, week3: number, week4: number}}
+ * @param {number} totalCostOrRowIndex - Total stock cost for the row, or row index if 2 params passed
+ * @param {number|null} maybeRowIndex - Row index for alternating direction parity (1-based or 0-based)
+ * @returns {{week1: number, week2: number, week3: number, week4: number, w1_cost: number, w2_cost: number, w3_cost: number, w4_cost: number}}
  */
-export function calculateWeeklySplit(totalQty, rowIndex = 0) {
+export function calculateWeeklySplit(totalQty, totalCostOrRowIndex = 0, maybeRowIndex = null) {
   const p = Math.max(0, Math.round(totalQty || 0));
-  if (p === 0) return { week1: 0, week2: 0, week3: 0, week4: 0 };
+  const totalCost = typeof totalCostOrRowIndex === 'number' && maybeRowIndex !== null ? totalCostOrRowIndex : 0;
+  const rowIndex = maybeRowIndex !== null ? maybeRowIndex : (typeof totalCostOrRowIndex === 'number' ? totalCostOrRowIndex : 0);
+
+  const uc = p > 0 && totalCost > 0 ? totalCost / p : 0;
+  if (p === 0) {
+    return {
+      week1: 0, week2: 0, week3: 0, week4: 0,
+      w1_qty: 0, w2_qty: 0, w3_qty: 0, w4_qty: 0,
+      w1_cost: 0, w2_cost: 0, w3_cost: 0, w4_cost: 0
+    };
+  }
 
   const b = Math.floor(p / 4);
   const rem = p % 4;
@@ -98,10 +154,23 @@ export function calculateWeeklySplit(totalQty, rowIndex = 0) {
   const w3 = b + (isEven ? (rem === 3 ? 1 : 0) : (rem >= 2 ? 1 : 0));
   const w4 = p - w1 - w2 - w3;
 
+  const w1c = w1 * uc;
+  const w2c = w2 * uc;
+  const w3c = w3 * uc;
+  const w4c = totalCost > 0 ? totalCost - w1c - w2c - w3c : 0;
+
   return {
     week1: w1,
     week2: w2,
     week3: w3,
-    week4: w4
+    week4: w4,
+    w1_qty: w1,
+    w2_qty: w2,
+    w3_qty: w3,
+    w4_qty: w4,
+    w1_cost: w1c,
+    w2_cost: w2c,
+    w3_cost: w3c,
+    w4_cost: w4c
   };
 }

@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { exportAllocationToExcel } from '../utils/excelParser';
+import { exportAllocationToPDF, printAllocationMatrixDirect } from '../utils/pdfGenerator';
 import { calculateWeeklySplit } from '../utils/allocationEngine';
 import SaveRecordModal from './SaveRecordModal';
 import {
   Split,
   Download,
+  Printer,
+  FileText,
   Sparkles,
   UploadCloud,
   Layers,
@@ -87,40 +90,70 @@ export default function AllocationMatrix() {
   const otherItems = filteredAllocations.filter(item => !displayItems.includes(item) && !batteryItems.includes(item));
 
   // Compute category sub-totals and site breakdowns
-  const computeGroupTotals = (items) => {
+  // Compute category sub-totals and site breakdowns
+  const computeGroupTotals = (items, startRowIndex = 3) => {
     let totalQty = 0;
     let totalCost = 0;
     let totalW1 = 0;
     let totalW2 = 0;
     let totalW3 = 0;
     let totalW4 = 0;
+    let totalW1Cost = 0;
+    let totalW2Cost = 0;
+    let totalW3Cost = 0;
+    let totalW4Cost = 0;
     const perSite = {};
     orderedServiceSites.forEach(s => { perSite[s.id] = 0; });
 
     items.forEach((item, idx) => {
       const qty = item.total_allocated_qty || 0;
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const price = item.stocking_price || part?.stocking_price || 0;
-      const split = calculateWeeklySplit(qty, idx);
+      const isDisplay = item.category_id === 'cat-display' || part?.category_id === 'cat-display' || item.description?.toLowerCase().includes('display');
+      const fallbackPrice = isDisplay ? 279 : 99;
+      const price = item.stocking_price || part?.stocking_price || fallbackPrice;
+      const rowCost = qty * price;
+      const excelRowNumber = startRowIndex + idx;
+      const split = calculateWeeklySplit(qty, rowCost, excelRowNumber);
 
       totalQty += qty;
-      totalCost += qty * price;
-      totalW1 += split.week1;
-      totalW2 += split.week2;
-      totalW3 += split.week3;
-      totalW4 += split.week4;
+      totalCost += rowCost;
+      totalW1 += split.w1_qty;
+      totalW2 += split.w2_qty;
+      totalW3 += split.w3_qty;
+      totalW4 += split.w4_qty;
+      totalW1Cost += split.w1_cost;
+      totalW2Cost += split.w2_cost;
+      totalW3Cost += split.w3_cost;
+      totalW4Cost += split.w4_cost;
 
       orderedServiceSites.forEach(s => {
-        perSite[s.id] = (perSite[s.id] || 0) + (item.site_quantities?.[s.id] || 0);
+        perSite[s.id] = (perSite[s.id] || 0) + (item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0);
       });
     });
 
-    return { totalQty, totalCost, totalW1, totalW2, totalW3, totalW4, perSite };
+    return { totalQty, totalCost, totalW1, totalW2, totalW3, totalW4, totalW1Cost, totalW2Cost, totalW3Cost, totalW4Cost, perSite };
   };
 
-  const displayTotals = computeGroupTotals(displayItems);
-  const batteryTotals = computeGroupTotals(batteryItems);
-  const grandGroupTotals = computeGroupTotals(filteredAllocations);
+  const displayTotals = computeGroupTotals(displayItems, 3);
+  const batteryTotals = computeGroupTotals(batteryItems, 25);
+  
+  // Grand totals across all parts
+  const grandGroupTotals = {
+    totalQty: displayTotals.totalQty + batteryTotals.totalQty,
+    totalCost: displayTotals.totalCost + batteryTotals.totalCost,
+    totalW1: displayTotals.totalW1 + batteryTotals.totalW1,
+    totalW2: displayTotals.totalW2 + batteryTotals.totalW2,
+    totalW3: displayTotals.totalW3 + batteryTotals.totalW3,
+    totalW4: displayTotals.totalW4 + batteryTotals.totalW4,
+    totalW1Cost: displayTotals.totalW1Cost + batteryTotals.totalW1Cost,
+    totalW2Cost: displayTotals.totalW2Cost + batteryTotals.totalW2Cost,
+    totalW3Cost: displayTotals.totalW3Cost + batteryTotals.totalW3Cost,
+    totalW4Cost: displayTotals.totalW4Cost + batteryTotals.totalW4Cost,
+    perSite: {}
+  };
+  orderedServiceSites.forEach(s => {
+    grandGroupTotals.perSite[s.id] = (displayTotals.perSite[s.id] || 0) + (batteryTotals.perSite[s.id] || 0);
+  });
 
   // Compute site column totals & financial breakdowns
   const totalAllocatedAllParts = grandGroupTotals.totalQty;
@@ -130,9 +163,11 @@ export default function AllocationMatrix() {
   orderedServiceSites.forEach(s => {
     let sumCost = 0;
     filteredAllocations.forEach(item => {
-      const qty = item.site_quantities?.[s.id] || 0;
+      const qty = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const price = item.stocking_price || part?.stocking_price || 0;
+      const isDisplay = item.category_id === 'cat-display' || part?.category_id === 'cat-display' || item.description?.toLowerCase().includes('display');
+      const fallbackPrice = isDisplay ? 279 : 99;
+      const price = item.stocking_price || part?.stocking_price || fallbackPrice;
       sumCost += qty * price;
     });
     siteCostTotals[s.id] = sumCost;
@@ -140,20 +175,38 @@ export default function AllocationMatrix() {
 
   const grandTotalCost = grandGroupTotals.totalCost;
 
-  const handleExport = () => {
+  const handleExport = async () => {
     if (filteredAllocations.length === 0) {
       showToast('No allocations available to export', 'warning');
       return;
     }
-    exportAllocationToExcel(filteredAllocations, orderedServiceSites, 'August 2026');
-    showToast('Exported Master Allocation to Excel', 'success');
+    await exportAllocationToExcel(filteredAllocations, orderedServiceSites, 'August 2026');
+    showToast('Exported Master Allocation with corporate colors and styles to Excel (.xlsx)', 'success');
   };
 
-  const renderItemRow = (item, commodityLabel, index) => {
+  const handleDownloadPDF = () => {
+    if (filteredAllocations.length === 0) {
+      showToast('No allocations available to export', 'warning');
+      return;
+    }
+    exportAllocationToPDF(filteredAllocations, orderedServiceSites, 'August 2026');
+    showToast('Exported Master Allocation Matrix to PDF', 'success');
+  };
+
+  const handlePrint = () => {
+    if (filteredAllocations.length === 0) {
+      showToast('No allocations available to print', 'warning');
+      return;
+    }
+    printAllocationMatrixDirect(filteredAllocations, orderedServiceSites, 'August 2026');
+  };
+
+  const renderItemRow = (item, commodityLabel, index, excelRowNumber = 3) => {
     const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-    const stockPrice = part?.stocking_price || (commodityLabel === 'DISPLAY' ? 280 : 150);
-    const split = calculateWeeklySplit(item.total_allocated_qty, index);
+    const fallbackPrice = commodityLabel === 'DISPLAY' ? 279 : 99;
+    const stockPrice = item.stocking_price || part?.stocking_price || fallbackPrice;
     const totalStockPrice = (item.total_allocated_qty || 0) * stockPrice;
+    const split = calculateWeeklySplit(item.total_allocated_qty, totalStockPrice, excelRowNumber);
     const isOrderRequired = (item.total_allocated_qty || 0) > 0;
     const rowBg = isOrderRequired ? '#ffffff' : '#fef2f2';
 
@@ -193,7 +246,7 @@ export default function AllocationMatrix() {
         {/* 26 Site Branch Quantities or Shares */}
         {activeViewMode === 'shares' ? (
           orderedServiceSites.map(s => {
-            const qty = item.site_quantities?.[s.id] || 0;
+            const qty = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
             const share = item.total_allocated_qty > 0 ? ((qty / item.total_allocated_qty) * 100).toFixed(1) : '0.0';
             const hasShare = qty > 0;
             return (
@@ -204,7 +257,7 @@ export default function AllocationMatrix() {
           })
         ) : (
           orderedServiceSites.map(s => {
-            const qty = item.site_quantities?.[s.id] || 0;
+            const qty = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
             const hasValue = qty > 0;
             return (
               <td key={s.id} style={{ textAlign: 'center', padding: '3px 2px' }}>
@@ -237,11 +290,18 @@ export default function AllocationMatrix() {
           ${totalStockPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
         </td>
 
-        {/* 4-Week Split */}
-        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.week1}</td>
-        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.week2}</td>
-        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.week3}</td>
-        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.week4}</td>
+        {/* 4-Week Split: Parts Alloc & Total Price for each Week */}
+        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w1_qty}</td>
+        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w1_cost.toFixed(2)}</td>
+        
+        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w2_qty}</td>
+        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w2_cost.toFixed(2)}</td>
+        
+        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w3_qty}</td>
+        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w3_cost.toFixed(2)}</td>
+        
+        <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#334155', background: '#f8fafc' }}>{split.w4_qty}</td>
+        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0f172a', background: '#f8fafc', fontWeight: 600 }}>${split.w4_cost.toFixed(2)}</td>
 
         {/* Remarks Badge */}
         <td style={{ textAlign: 'center' }}>
@@ -332,10 +392,33 @@ export default function AllocationMatrix() {
               className="btn btn-secondary btn-sm"
               onClick={handleExport}
               disabled={filteredAllocations.length === 0}
+              title="Download formatted Master Allocation Excel Spreadsheet (.xlsx)"
               style={{ fontWeight: 600, padding: '6px 14px' }}
             >
               <Download size={14} />
               <span>Export Excel</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleDownloadPDF}
+              disabled={filteredAllocations.length === 0}
+              title="Download landscape corporate PDF of Master Allocation Matrix"
+              style={{ fontWeight: 600, padding: '6px 14px' }}
+            >
+              <FileText size={14} />
+              <span>Download PDF</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handlePrint}
+              disabled={filteredAllocations.length === 0}
+              title="Print formatted Master Allocation Matrix directly"
+              style={{ fontWeight: 600, padding: '6px 14px' }}
+            >
+              <Printer size={14} />
+              <span>Print Matrix</span>
             </button>
           </div>
         </div>
@@ -469,15 +552,19 @@ export default function AllocationMatrix() {
                   ))}
 
                   <th style={{ position: 'sticky', top: 0, background: '#0369a1', color: '#ffffff', textAlign: 'center', zIndex: 12, minWidth: '80px', fontWeight: 700 }}>
-                    Total Alloc
+                    Total Parts
                   </th>
-                  <th style={{ position: 'sticky', top: 0, background: '#0284c7', color: '#ffffff', textAlign: 'right', zIndex: 12, minWidth: '95px', fontWeight: 700 }}>
-                    Total Value
+                  <th style={{ position: 'sticky', top: 0, background: '#0284c7', color: '#ffffff', textAlign: 'right', zIndex: 12, minWidth: '110px', fontWeight: 700 }}>
+                    Total Stock Price
                   </th>
-                  <th style={{ position: 'sticky', top: 0, background: '#334155', color: '#f8fafc', textAlign: 'center', zIndex: 12, width: '38px' }}>W1</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#334155', color: '#f8fafc', textAlign: 'center', zIndex: 12, width: '38px' }}>W2</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#334155', color: '#f8fafc', textAlign: 'center', zIndex: 12, width: '38px' }}>W3</th>
-                  <th style={{ position: 'sticky', top: 0, background: '#334155', color: '#f8fafc', textAlign: 'center', zIndex: 12, width: '38px' }}>W4</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#334155', color: '#f8fafc', textAlign: 'center', zIndex: 12, minWidth: '45px', fontSize: '10.5px' }}>W1 Qty</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#1e293b', color: '#38bdf8', textAlign: 'right', zIndex: 12, minWidth: '85px', fontSize: '10.5px' }}>W1 Total</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#334155', color: '#f8fafc', textAlign: 'center', zIndex: 12, minWidth: '45px', fontSize: '10.5px' }}>W2 Qty</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#1e293b', color: '#38bdf8', textAlign: 'right', zIndex: 12, minWidth: '85px', fontSize: '10.5px' }}>W2 Total</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#334155', color: '#f8fafc', textAlign: 'center', zIndex: 12, minWidth: '45px', fontSize: '10.5px' }}>W3 Qty</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#1e293b', color: '#38bdf8', textAlign: 'right', zIndex: 12, minWidth: '85px', fontSize: '10.5px' }}>W3 Total</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#334155', color: '#f8fafc', textAlign: 'center', zIndex: 12, minWidth: '45px', fontSize: '10.5px' }}>W4 Qty</th>
+                  <th style={{ position: 'sticky', top: 0, background: '#1e293b', color: '#38bdf8', textAlign: 'right', zIndex: 12, minWidth: '85px', fontSize: '10.5px' }}>W4 Total</th>
                   <th style={{ position: 'sticky', top: 0, background: '#1e293b', color: '#f8fafc', textAlign: 'center', zIndex: 12, minWidth: '140px' }}>
                     Remarks
                   </th>
@@ -489,7 +576,7 @@ export default function AllocationMatrix() {
                 {displayItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
-                      <td colSpan={orderedServiceSites.length + 10}>
+                      <td colSpan={orderedServiceSites.length + 14}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <Smartphone size={16} color="#0284c7" />
                           <span>DISPLAY COMMODITY</span>
@@ -499,7 +586,7 @@ export default function AllocationMatrix() {
                         </div>
                       </td>
                     </tr>
-                    {displayItems.map((item, idx) => renderItemRow(item, 'DISPLAY', idx))}
+                    {displayItems.map((item, idx) => renderItemRow(item, 'DISPLAY', idx, idx + 3))}
                     {/* DISPLAY SUB-TOTAL (Matching Excel Row 24) */}
                     <tr style={{ background: '#f0f9ff', fontWeight: 700, borderTop: '2px solid #bae6fd', borderBottom: '2px solid #bae6fd' }}>
                       <td className="matrix-col-sticky-1 matrix-subtotal-td" style={{ background: '#f0f9ff', textAlign: 'center' }}>
@@ -520,13 +607,17 @@ export default function AllocationMatrix() {
                       <td style={{ textAlign: 'center', background: '#e0f2fe', color: '#0369a1', fontSize: '12.5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
                         {displayTotals.totalQty}
                       </td>
-                      <td style={{ textAlign: 'right', color: '#0369a1', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11.5px', background: '#f0f9ff' }}>
+                      <td style={{ textAlign: 'right', color: '#0369a1', fontWeight: 800, fontFamily: 'var(--font-mono)', fontSize: '11.5px', background: '#f0f9ff' }}>
                         ${displayTotals.totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#0369a1', background: '#f0f9ff' }}>{displayTotals.totalW1}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#0369a1', background: '#f0f9ff' }}>{displayTotals.totalW2}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#0369a1', background: '#f0f9ff' }}>{displayTotals.totalW3}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#0369a1', background: '#f0f9ff' }}>{displayTotals.totalW4}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW1}</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>${displayTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW2}</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>${displayTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW3}</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>${displayTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>{displayTotals.totalW4}</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#0369a1', fontWeight: 700, background: '#f0f9ff' }}>${displayTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       <td style={{ background: '#f0f9ff' }}></td>
                     </tr>
                   </>
@@ -536,7 +627,7 @@ export default function AllocationMatrix() {
                 {batteryItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
-                      <td colSpan={orderedServiceSites.length + 10}>
+                      <td colSpan={orderedServiceSites.length + 14}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <BatteryCharging size={16} color="#15803d" />
                           <span>BATTERY COMMODITY</span>
@@ -546,7 +637,7 @@ export default function AllocationMatrix() {
                         </div>
                       </td>
                     </tr>
-                    {batteryItems.map((item, idx) => renderItemRow(item, 'BATTERY', idx + displayItems.length))}
+                    {batteryItems.map((item, idx) => renderItemRow(item, 'BATTERY', idx, idx + 25))}
                     {/* BATTERY SUB-TOTAL (Matching Excel Row 43) */}
                     <tr style={{ background: '#f0fdf4', fontWeight: 700, borderTop: '2px solid #bbf7d0', borderBottom: '2px solid #bbf7d0' }}>
                       <td className="matrix-col-sticky-1 matrix-subtotal-td" style={{ background: '#f0fdf4', textAlign: 'center' }}>
@@ -570,10 +661,14 @@ export default function AllocationMatrix() {
                       <td style={{ textAlign: 'right', color: '#15803d', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11.5px', background: '#f0fdf4' }}>
                         ${batteryTotals.totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#15803d', background: '#f0fdf4' }}>{batteryTotals.totalW1}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#15803d', background: '#f0fdf4' }}>{batteryTotals.totalW2}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#15803d', background: '#f0fdf4' }}>{batteryTotals.totalW3}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#15803d', background: '#f0fdf4' }}>{batteryTotals.totalW4}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW1}</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW2}</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW3}</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>{batteryTotals.totalW4}</td>
+                      <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#15803d', fontWeight: 700, background: '#f0fdf4' }}>${batteryTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       <td style={{ background: '#f0fdf4' }}></td>
                     </tr>
                   </>
@@ -583,7 +678,7 @@ export default function AllocationMatrix() {
                 {otherItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
-                      <td colSpan={orderedServiceSites.length + 10}>
+                      <td colSpan={orderedServiceSites.length + 14}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <Layers size={16} color="#64748b" />
                           <span>OTHER COMMODITIES</span>
@@ -620,13 +715,17 @@ export default function AllocationMatrix() {
                   <td style={{ textAlign: 'center', background: '#0284c7', color: '#ffffff', fontSize: '13px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
                     {totalAllocatedAllParts}
                   </td>
-                  <td style={{ textAlign: 'right', color: '#4ade80', fontWeight: 800, fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
-                    ${grandTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
+                    —
                   </td>
-                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW1}</td>
-                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW2}</td>
-                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW3}</td>
-                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW4}</td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW1}</td>
+                  <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '10px' }}>—</td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW2}</td>
+                  <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '10px' }}>—</td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW3}</td>
+                  <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '10px' }}>—</td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW4}</td>
+                  <td style={{ textAlign: 'right', color: '#94a3b8', fontSize: '10px' }}>—</td>
                   <td style={{ textAlign: 'center' }}>
                     <span style={{ fontSize: '9.5px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: '#0284c7', color: '#ffffff' }}>TOTAL PLAN</span>
                   </td>
@@ -652,13 +751,17 @@ export default function AllocationMatrix() {
                   <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
                     —
                   </td>
-                  <td style={{ textAlign: 'center', background: '#0369a1', color: '#ffffff', fontWeight: 800, fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
-                    ${Math.round(grandTotalCost).toLocaleString()}
+                  <td style={{ textAlign: 'right', background: '#0369a1', color: '#ffffff', fontWeight: 800, fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
+                    ${grandTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </td>
                   <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W1</td>
+                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW1Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W2</td>
+                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW2Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W3</td>
+                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW3Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W4</td>
+                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>${grandGroupTotals.totalW4Cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   <td style={{ textAlign: 'center', color: '#64748b', fontSize: '10.5px' }}>—</td>
                 </tr>
               </tfoot>

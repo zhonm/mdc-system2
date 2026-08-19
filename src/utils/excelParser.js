@@ -1,15 +1,7 @@
 import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { calculateLinearRegressionForecast, calculateRecommendedOrder } from './forecastEngine.js';
-import { calculateProportionalAllocation, calculateWeeklySplit } from './allocationEngine.js';
-
-/**
- * Universal Parser for DC System.
- * Intelligently parses:
- * 1. Google Sheets / Excel Multi-Tab Workbooks (Forecasting + Master Allocation)
- * 2. Pre-Aggregated Demand Forecasting Sheets (Jan..Jul..Aug side-by-side Battery & Display)
- * 3. Master Allocation Matrix Sheets (26 Branch distribution columns)
- * 4. Raw GSX / Fixably Repair Event Logs (.csv, .xlsx)
- */
+import { calculateProportionalAllocation, calculate2DCumulativeAllocation, calculateWeeklySplit } from './allocationEngine.js';
 
 export function isForecastingMatrixSheet(rows) {
   for (let r = 0; r < Math.min(6, rows.length); r++) {
@@ -38,7 +30,7 @@ export function isAllocationMatrixSheet(rows) {
   return false;
 }
 
-export function isRawUsageFile(sampleRows, fileName, sheetName) {
+export function isRawUsageFile(sampleRows, fileName = '', sheetName = '') {
   if (/fixably|gsx|repairs|raw/i.test(fileName) || /repairs|raw/i.test(sheetName)) {
     return true;
   }
@@ -55,37 +47,150 @@ export function isRawUsageFile(sampleRows, fileName, sheetName) {
   return false;
 }
 
+export const CANONICAL_SITE_LIST = [
+  { code: 'APP BHS', name: 'MOBILECARE - APP BONIFACIO HIGH STREET' },
+  { code: 'APP GB3', name: 'MOBILECARE - APP GREENBELT 3' },
+  { code: 'APP PPM', name: 'MOBILECARE - APP POWER PLANT MALL' },
+  { code: 'ASP GL5', name: 'MOBILECARE - GLORIETTA 5' },
+  { code: 'ASP SMS', name: "MOBILECARE - S'MAISON" },
+  { code: 'APP MOA', name: 'MOBILECARE - APP MALL OF ASIA' },
+  { code: 'ASP POD', name: 'MOBILECARE - THE PODIUM' },
+  { code: 'APP MEG', name: 'MOBILECARE - APP MEGAMALL' },
+  { code: 'APP ANX', name: 'MOBILECARE - APP THE ANNEX' },
+  { code: 'APP TRI', name: 'MOBILECARE - APP TRINOMA' },
+  { code: 'ASP VN', name: 'MOBILECARE - VERTIS NORTH' },
+  { code: 'ASP NES', name: 'MOBILECARE - NORTHEAST SQUARE' },
+  { code: 'APP FES', name: 'MOBILECARE - APP FESTIVAL MALL' },
+  { code: 'ASP MRK', name: 'MOBILECARE - SM MARIKINA' },
+  { code: 'APP RM', name: 'MOBILECARE - APP MAGNOLIA' },
+  { code: 'ASP LIM', name: 'MOBILECARE - LIMA ESTATE' },
+  { code: 'ASP NPM', name: 'MOBILECARE - NEWPOINT MALL' },
+  { code: 'ASP NAG', name: 'MOBILECARE - NAGA' },
+  { code: 'ASP LAU', name: 'MOBILECARE - LA UNION' },
+  { code: 'ASP ILO', name: 'MOBILECARE - FESTIVE WALK ILOILO' },
+  { code: 'ASP CEB', name: 'MOBILECARE - CEBU' },
+  { code: 'ASP ZAM', name: 'MOBILECARE - ZAMBOANGA' },
+  { code: 'ASP ABR', name: 'MOBILECARE - DAVAO' },
+  { code: 'ASP COT', name: 'MOBILECARE SERVICES' },
+  { code: 'ASP CDO', name: 'MOBILECARE - CAGAYAN DE ORO' },
+  { code: 'APP LAN', name: 'MOBILECARE - APP SM LANANG' }
+];
+
+export const MASTER_PART_PRICING = {
+  // Displays
+  '661-21988': { stocking: 279, exchange: 234, desc: 'Display, iPhone 13', category: 'cat-display' },
+  '661-21993': { stocking: 279, exchange: 234, desc: 'Display, iPhone 13 Pro', category: 'cat-display' },
+  '661-22309': { stocking: 329, exchange: 276, desc: 'Display, iPhone 13 Pro Max', category: 'cat-display' },
+  '661-30366': { stocking: 279, exchange: 234, desc: 'Display, iPhone 14', category: 'cat-display' },
+  '661-30390': { stocking: 329, exchange: 276, desc: 'Display, iPhone 14 Plus', category: 'cat-display' },
+  '661-29370': { stocking: 329, exchange: 276, desc: 'Display, iPhone 14 Pro', category: 'cat-display' },
+  '661-30401': { stocking: 379, exchange: 318, desc: 'Display, iPhone 14 Pro Max', category: 'cat-display' },
+  '661-36706': { stocking: 279, exchange: 234, desc: 'Display, iPhone 15', category: 'cat-display' },
+  '661-37213': { stocking: 329, exchange: 276, desc: 'Display, iPhone 15 Plus', category: 'cat-display' },
+  '661-35699': { stocking: 329, exchange: 276, desc: 'Display, iPhone 15 Pro', category: 'cat-display' },
+  '661-36915': { stocking: 379, exchange: 318, desc: 'Display, iPhone 15 Pro Max', category: 'cat-display' },
+  '661-44797': { stocking: 279, exchange: 246, desc: 'Display, iPhone 16', category: 'cat-display' },
+  '661-42843': { stocking: 329, exchange: 290, desc: 'Display, iPhone 16 Plus', category: 'cat-display' },
+  '661-42726': { stocking: 329, exchange: 290, desc: 'Display, iPhone 16 Pro', category: 'cat-display' },
+  '661-44955': { stocking: 379, exchange: 334, desc: 'Display, iPhone 16 Pro Max', category: 'cat-display' },
+  '661-49431': { stocking: 229, exchange: 202, desc: 'Display, iPhone 16e', category: 'cat-display' },
+  '661-56065': { stocking: 329, exchange: 313, desc: 'Display, iPhone 17', category: 'cat-display' },
+  '661-56125': { stocking: 329, exchange: 313, desc: 'Display, iPhone 17 Pro', category: 'cat-display' },
+  '661-56050': { stocking: 379, exchange: 360, desc: 'Display, iPhone 17 Pro Max', category: 'cat-display' },
+  '661-60211': { stocking: 229, exchange: 218, desc: 'Display, iPhone 17e', category: 'cat-display' },
+  '661-55240': { stocking: 329, exchange: 313, desc: 'Display, iPhone Air', category: 'cat-display' },
+
+  // Batteries
+  '661-21991': { stocking: 89, exchange: 46, desc: 'Battery, iPhone 13', category: 'cat-battery' },
+  '661-21996': { stocking: 89, exchange: 46, desc: 'Battery, iPhone 13 Pro', category: 'cat-battery' },
+  '661-22294': { stocking: 89, exchange: 46, desc: 'Battery, iPhone 13 Pro Max', category: 'cat-battery' },
+  '661-30373': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 14', category: 'cat-battery' },
+  '661-30394': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 14 Plus', category: 'cat-battery' },
+  '661-30382': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 14 Pro', category: 'cat-battery' },
+  '661-30397': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 14 Pro Max', category: 'cat-battery' },
+  '661-35885': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 15', category: 'cat-battery' },
+  '661-37207': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 15 Plus', category: 'cat-battery' },
+  '661-35694': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 15 Pro', category: 'cat-battery' },
+  '661-36918': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 15 Pro Max', category: 'cat-battery' },
+  '661-44796': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 16', category: 'cat-battery' },
+  '661-42720': { stocking: 119, exchange: 62, desc: 'Battery, iPhone 16 Pro', category: 'cat-battery' },
+  '661-44954': { stocking: 119, exchange: 62, desc: 'Battery, iPhone 16 Pro Max', category: 'cat-battery' },
+  '661-56064': { stocking: 99, exchange: 51, desc: 'Battery, iPhone 17', category: 'cat-battery' },
+  '661-55235': { stocking: 119, exchange: 62, desc: 'Battery, iPhone Air', category: 'cat-battery' },
+  '661-56121': { stocking: 119, exchange: 62, desc: 'Battery, pSIM, iPhone 17 Pro', category: 'cat-battery' },
+  '661-56049': { stocking: 119, exchange: 62, desc: 'Battery, pSIM, iPhone 17 Pro Max', category: 'cat-battery' }
+};
+
+export function lookupPartPrice(pn, desc = '', existingParts = []) {
+  const cleanPn = String(pn || '').trim().toUpperCase();
+  const cleanDesc = String(desc || '').trim();
+
+  // 1. Direct PN lookup in MASTER_PART_PRICING
+  if (MASTER_PART_PRICING[cleanPn]) {
+    return {
+      stockingPrice: MASTER_PART_PRICING[cleanPn].stocking,
+      exchangePrice: MASTER_PART_PRICING[cleanPn].exchange
+    };
+  }
+
+  // 2. Lookup in existingParts catalog
+  const foundPart = (existingParts || []).find(p => p.part_number === cleanPn || (cleanDesc && p.description === cleanDesc));
+  if (foundPart && foundPart.stocking_price) {
+    return {
+      stockingPrice: parseFloat(foundPart.stocking_price) || 0,
+      exchangePrice: parseFloat(foundPart.exchange_price) || 0
+    };
+  }
+
+  // 3. Description search in MASTER_PART_PRICING
+  for (const info of Object.values(MASTER_PART_PRICING)) {
+    if (cleanDesc && info.desc.toLowerCase() === cleanDesc.toLowerCase()) {
+      return {
+        stockingPrice: info.stocking,
+        exchangePrice: info.exchange
+      };
+    }
+  }
+
+  // 4. Default fallback by category
+  const isDisplay = cleanDesc.toLowerCase().includes('display') || cleanDesc.toLowerCase().includes('screen');
+  return {
+    stockingPrice: isDisplay ? 279 : 99,
+    exchangePrice: isDisplay ? 234 : 51
+  };
+}
+
+export const LEGACY_EXCLUDE_REGEX = /^((Battery, iPhone (11|8|11 Pro|11 Pro Max|12 and 12 Pro|12 mini|12 Pro Max|13 mini|8 Plus|SE 2nd gen|SE 3rd generation|X|XR))|(Display, iPhone (11|12|12 mini|12 Pro|12 Pro Max|13 mini|XR)))$/i;
+
 export function isTargetIPhonePart(desc, pn, filterScope = 'IPHONE_13_PLUS_BATTERY_DISPLAY') {
   if (filterScope === 'ALL_PARTS') return true;
 
-  const d = String(desc || '').trim().toLowerCase();
-  const p = String(pn || '').trim().toLowerCase();
-  const combined = `${d} ${p}`;
+  const d = String(desc || '').trim();
+  const p = String(pn || '').trim();
+  const dLower = d.toLowerCase();
+  const combined = `${d} ${p}`.toLowerCase();
 
   // 1. Exclude non-iPhone hardware, other commodities (camera, back glass, systems), & consumables
-  if (/ipad|macbook|mac\s|imac|watch|airpod|vision|pencil|top case|enclosure|housing|logic board|flex|speaker|receiver|screw|adhesive|\btray\b|sensor|camera|truedepth|\bglass\b|rear\s*system|mid\s*system|\bsim\s*tray\b|\bsim\s*eject|battery tape|screw kit/i.test(d)) {
+  if (/ipad|macbook|mac\s|imac|watch|airpod|vision|pencil|top case|enclosure|housing|logic board|flex|speaker|receiver|screw|adhesive|\btray\b|sensor|camera|truedepth|\bglass\b|rear\s*system|mid\s*system|\bsim\s*tray\b|\bsim\s*eject|battery tape|screw kit/i.test(dLower)) {
     return false;
   }
 
   // 2. Must be iPhone
-  const isIphone = /iphone/i.test(combined);
-  if (!isIphone) return false;
+  if (!/iphone/i.test(combined)) return false;
 
   // 3. Strictly Battery or Display only
-  const isBattery = /battery|batt\b/i.test(d);
-  const isDisplay = /display|screen|oled|lcd/i.test(d);
+  const isBattery = /battery|batt\b/i.test(dLower);
+  const isDisplay = /display|screen|oled|lcd/i.test(dLower);
   if (!isBattery && !isDisplay) {
     return false;
   }
 
-  // 4. Exclude older iPhones (< iPhone 13)
-  if (/\biphone\s*(4|4s|5|5s|5c|6|6s|6\s*plus|6s\s*plus|7|7\s*plus|8|8\s*plus|x|xr|xs|xs\s*max|11|11\s*pro|11\s*pro\s*max|12|12\s*mini|12\s*pro|12\s*pro\s*max)\b/i.test(d)) {
+  // 4. Exclude older iPhones and 13 mini matching exact Google Sheets regex
+  if (LEGACY_EXCLUDE_REGEX.test(d)) {
     return false;
   }
 
-  const is13OrNewer = /\biphone\s*(13|14|15|16|17|18|19|20|air|se\s*\(3rd)\b/i.test(d) ||
-                      /iphone\s*(13|14|15|16|17|air)/i.test(combined);
-
+  const is13OrNewer = /\biphone\s*(13|14|15|16|16e|17|17e|18|19|20|air)\b/i.test(dLower);
   if (!is13OrNewer) {
     return false;
   }
@@ -229,7 +334,9 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             const allocatedResults = calculateProportionalAllocation(targetQty, siteDemands);
             const siteQuantities = {};
             allocatedResults.forEach(res => { siteQuantities[res.siteId] = res.allocatedQty; });
-            const split = calculateWeeklySplit(targetQty, idx);
+            const pricing = lookupPartPrice(pn, f.description, currentParts);
+            const totalCost = targetQty * pricing.stockingPrice;
+            const split = calculateWeeklySplit(targetQty, totalCost, idx + 3);
 
             return {
               part_id: f.part_id || `part-${pn}`,
@@ -237,12 +344,18 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
               description: f.description,
               category_id: f.category_id,
               forecasted_qty: targetQty,
-              stocking_price: f.category_id === 'cat-display' ? 280 : 99,
+              stocking_price: pricing.stockingPrice,
+              exchange_price: pricing.exchangePrice,
               total_allocated_qty: targetQty,
-              w1_qty: split.week1,
-              w2_qty: split.week2,
-              w3_qty: split.week3,
-              w4_qty: split.week4,
+              total_stock_cost: totalCost,
+              w1_qty: split.w1_qty,
+              w2_qty: split.w2_qty,
+              w3_qty: split.w3_qty,
+              w4_qty: split.w4_qty,
+              w1_cost: split.w1_cost,
+              w2_cost: split.w2_cost,
+              w3_cost: split.w3_cost,
+              w4_cost: split.w4_cost,
               site_quantities: siteQuantities
             };
           });
@@ -299,7 +412,9 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             const allocatedResults = calculateProportionalAllocation(targetQty, siteDemands);
             const siteQuantities = {};
             allocatedResults.forEach(res => { siteQuantities[res.siteId] = res.allocatedQty; });
-            const split = calculateWeeklySplit(targetQty, idx);
+            const pricing = lookupPartPrice(f.part_number, f.description, currentParts);
+            const totalCost = targetQty * pricing.stockingPrice;
+            const split = calculateWeeklySplit(targetQty, totalCost, idx + 3);
 
             return {
               part_id: f.part_id,
@@ -307,12 +422,18 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
               description: f.description,
               category_id: f.category_id,
               forecasted_qty: targetQty,
-              stocking_price: f.category_id === 'cat-display' ? 280 : 99,
+              stocking_price: pricing.stockingPrice,
+              exchange_price: pricing.exchangePrice,
               total_allocated_qty: targetQty,
-              w1_qty: split.week1,
-              w2_qty: split.week2,
-              w3_qty: split.week3,
-              w4_qty: split.week4,
+              total_stock_cost: totalCost,
+              w1_qty: split.w1_qty,
+              w2_qty: split.w2_qty,
+              w3_qty: split.w3_qty,
+              w4_qty: split.w4_qty,
+              w1_cost: split.w1_cost,
+              w2_cost: split.w2_cost,
+              w3_cost: split.w3_cost,
+              w4_cost: split.w4_cost,
               site_quantities: siteQuantities
             };
           });
@@ -521,7 +642,12 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
  * Sub-parser: Master Allocation Matrix Sheet (Matches Google Sheet Screenshot 1 & MasterList)
  * Dynamically identifies all 26 branch columns.
  */
-export function parseAllocationSheet(rawRows, existingSites = [], filterScope = 'IPHONE_13_PLUS_BATTERY_DISPLAY') {
+export function parseAllocationSheet(rawRows, existingSites = [], existingPartsOrFilterScope = [], maybeFilterScope = null) {
+  const existingParts = Array.isArray(existingPartsOrFilterScope) ? existingPartsOrFilterScope : [];
+  const filterScope = typeof existingPartsOrFilterScope === 'string'
+    ? existingPartsOrFilterScope
+    : (maybeFilterScope || 'IPHONE_13_PLUS_BATTERY_DISPLAY');
+
   let headerRowIndex = 0;
   for (let r = 0; r < Math.min(8, rawRows.length); r++) {
     const rowStr = (rawRows[r] || []).join(' ').toUpperCase();
@@ -536,6 +662,7 @@ export function parseAllocationSheet(rawRows, existingSites = [], filterScope = 
   const descCol = headerRow.findIndex(h => /description|desc|part\s*name/i.test(h)) >= 0 ? headerRow.findIndex(h => /description|desc|part\s*name/i.test(h)) : 6;
   const forecastQtyCol = headerRow.findIndex(h => /forecasted\s*qty|forecast/i.test(h));
   const stockPriceCol = headerRow.findIndex(h => /stocking\s*price|price/i.test(h));
+  const exchangePriceCol = headerRow.findIndex(h => /exchange\s*price/i.test(h));
   const totalAllocCol = headerRow.findIndex(h => /total\s*parts|total\s*alloc|total/i.test(h));
 
   // Map site columns
@@ -550,13 +677,15 @@ export function parseAllocationSheet(rawRows, existingSites = [], filterScope = 
 
     let siteObj = sites.find(s => cleanH.includes(s.code.toUpperCase()) || s.code.toUpperCase().includes(cleanH) || cleanH.includes(s.name.toUpperCase()) || s.name.toUpperCase().includes(cleanH));
     if (!siteObj) {
-      const code = cleanH.replace(/[^A-Z0-9]/g, '').substring(0, 7) || `SITE-${colIdx}`;
+      const canonicalMatch = CANONICAL_SITE_LIST.find(cs => cs.code === cleanH || cleanH.includes(cs.code) || cs.name.includes(cleanH));
+      const code = canonicalMatch ? canonicalMatch.code : (cleanH.replace(/[^A-Z0-9]/g, '').substring(0, 7) || `SITE-${colIdx}`);
+      const name = canonicalMatch ? canonicalMatch.name : cleanH;
       siteObj = {
-        id: `site-${code.toLowerCase()}`,
+        id: `site-${code.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
         code: code,
-        name: cleanH,
+        name: name,
         region: /cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(cleanH) ? 'Provincial' : 'Metro Manila',
-        address: `${cleanH} Service Branch, Philippines`,
+        address: `${name} Service Branch, Philippines`,
         is_dc: false,
         is_active: true
       };
@@ -603,18 +732,23 @@ export function parseAllocationSheet(rawRows, existingSites = [], filterScope = 
 
     const totalAlloc = totalAllocCol >= 0 && row[totalAllocCol] !== '' ? (parseInt(row[totalAllocCol]) || 0) : rowSum;
     const forecastQty = forecastQtyCol >= 0 && row[forecastQtyCol] !== '' ? (parseInt(row[forecastQtyCol]) || 0) : totalAlloc;
-    const parsedPrice = stockPriceCol >= 0 && row[stockPriceCol] !== '' ? (parseFloat(String(row[stockPriceCol]).replace(/[^0-9.]/g, '')) || 0) : 0;
     
-    const isDisplay = desc.toLowerCase().includes('display');
+    // Exact price lookup with fallback to master price map
+    const defaultPricing = lookupPartPrice(pn, desc, existingParts);
+    const parsedStockPrice = stockPriceCol >= 0 && row[stockPriceCol] !== '' ? (parseFloat(String(row[stockPriceCol]).replace(/[^0-9.]/g, '')) || 0) : 0;
+    const parsedExchangePrice = exchangePriceCol >= 0 && row[exchangePriceCol] !== '' ? (parseFloat(String(row[exchangePriceCol]).replace(/[^0-9.]/g, '')) || 0) : 0;
+
+    const finalStockPrice = parsedStockPrice > 0 ? parsedStockPrice : defaultPricing.stockingPrice;
+    const finalExchangePrice = parsedExchangePrice > 0 ? parsedExchangePrice : defaultPricing.exchangePrice;
+
+    const isDisplay = desc.toLowerCase().includes('display') || desc.toLowerCase().includes('screen');
     const isBattery = desc.toLowerCase().includes('battery') || desc.toLowerCase().includes('batt');
     const isCamera = desc.toLowerCase().includes('camera');
     const isBackGlass = desc.toLowerCase().includes('back glass') || desc.toLowerCase().includes('rear system');
 
     const catId = isDisplay ? 'cat-display' : isBattery ? 'cat-battery' : isCamera ? 'cat-camera' : isBackGlass ? 'cat-backglass' : 'cat-other';
-    const fallbackPrice = isDisplay ? 280 : isBattery ? 99 : 150;
-    const finalStockPrice = parsedPrice > 0 ? parsedPrice : fallbackPrice;
-
-    const split = calculateWeeklySplit(totalAlloc, r);
+    const totalCost = totalAlloc * finalStockPrice;
+    const split = calculateWeeklySplit(totalAlloc, totalCost, r + 1);
 
     allocations.push({
       part_id: `part-${pn}`,
@@ -623,11 +757,17 @@ export function parseAllocationSheet(rawRows, existingSites = [], filterScope = 
       category_id: catId,
       forecasted_qty: forecastQty,
       stocking_price: finalStockPrice,
+      exchange_price: finalExchangePrice,
       total_allocated_qty: totalAlloc,
-      w1_qty: split.week1,
-      w2_qty: split.week2,
-      w3_qty: split.week3,
-      w4_qty: split.week4,
+      total_stock_cost: totalCost,
+      w1_qty: split.w1_qty,
+      w2_qty: split.w2_qty,
+      w3_qty: split.w3_qty,
+      w4_qty: split.w4_qty,
+      w1_cost: split.w1_cost,
+      w2_cost: split.w2_cost,
+      w3_cost: split.w3_cost,
+      w4_cost: split.w4_cost,
       site_quantities: siteQuantities
     });
 
@@ -638,6 +778,7 @@ export function parseAllocationSheet(rawRows, existingSites = [], filterScope = 
       category_id: catId,
       iphone_model: desc.replace(/^(Battery|Display|Camera|Back Glass),?\s*/i, ''),
       stocking_price: finalStockPrice,
+      exchange_price: finalExchangePrice,
       is_active: true
     });
   }
@@ -683,7 +824,21 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
   let totalRawRowsRead = 0;
   let filteredOutCount = 0;
 
-  existingSites.forEach(s => {
+  // Build canonical site index
+  const activeServiceSites = CANONICAL_SITE_LIST.map((cs, idx) => {
+    const existing = (existingSites || []).find(s => s.code === cs.code || cs.name.includes(s.name) || s.name.includes(cs.name));
+    return existing || {
+      id: `site-${cs.code.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+      code: cs.code,
+      name: cs.name,
+      region: /cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(cs.name) ? 'Provincial' : 'Metro Manila',
+      address: `${cs.name} Service Branch, Philippines`,
+      is_dc: false,
+      is_active: true
+    };
+  });
+
+  activeServiceSites.forEach(s => {
     discoveredSites.set(s.id, s);
     discoveredSites.set(s.code.toUpperCase(), s);
     discoveredSites.set(s.name.toUpperCase(), s);
@@ -708,7 +863,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     return null;
   }
 
-  let targetMonthIdx = 7; // August default
+  let targetMonthIdx = 7; // August default (8th month, index 7)
   if (selectedMonth !== 'auto' && selectedMonth !== undefined && selectedMonth !== '') {
     targetMonthIdx = Math.max(0, Math.min(11, parseInt(selectedMonth) || 7));
   } else if (fileName) {
@@ -717,6 +872,8 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     if (foundIdx >= 0) targetMonthIdx = foundIdx;
   }
   let defaultFileMonthIdx = targetMonthIdx;
+
+  const validRepairs = [];
 
   for (let r = headerIndex + 1; r < rawRows.length; r++) {
     const row = rawRows[r];
@@ -741,33 +898,12 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     const cleanPn = rawPn ? rawPn.toUpperCase() : `PART-${r}`;
     const cleanDesc = rawDesc || `Apple Genuine Part (${cleanPn})`;
 
-    let matchedSiteId = 'site-dc';
-    if (rawSite) {
-      const siteKey = rawSite.toUpperCase();
-      let matched = existingSites.find(s => 
-        siteKey.includes(s.code.toUpperCase()) || 
-        siteKey.includes(s.name.toUpperCase()) ||
-        s.name.toUpperCase().includes(siteKey) ||
-        s.code.toUpperCase().includes(siteKey)
-      );
-
-      if (matched) {
-        matchedSiteId = matched.id;
-      } else {
-        const newCode = rawSite.replace(/[^a-zA-Z0-9]/g, '').substring(0, 7).toUpperCase() || `SITE-${r}`;
-        const newSiteObj = {
-          id: `site-${newCode.toLowerCase()}`,
-          code: newCode,
-          name: rawSite,
-          region: /cebu|davao|iloilo|naga|la union|zamboanga|cagayan|lanang|lima|newpoint/i.test(rawSite) ? 'Provincial' : 'Metro Manila',
-          address: `${rawSite}, Philippines`,
-          is_dc: false,
-          is_active: true
-        };
-        discoveredSites.set(newSiteObj.id, newSiteObj);
-        matchedSiteId = newSiteObj.id;
-      }
-    }
+    let matchedSite = activeServiceSites.find(s => 
+      rawSite.toUpperCase().includes(s.code.toUpperCase()) ||
+      rawSite.toUpperCase().includes(s.name.toUpperCase()) ||
+      s.name.toUpperCase().includes(rawSite.toUpperCase()) ||
+      s.code.toUpperCase().includes(rawSite.toUpperCase())
+    ) || activeServiceSites[0];
 
     let monthIdx = defaultFileMonthIdx;
     if (rawMonth !== undefined && rawMonth !== null && rawMonth !== '') {
@@ -793,57 +929,135 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       monthIndex: monthIdx,
       partNumber: cleanPn,
       description: cleanDesc,
-      siteId: matchedSiteId,
+      siteId: matchedSite.id,
       rawSiteName: rawSite,
       quantity: rawQty,
       serialNumber: serial,
       category_id: catId
     });
 
-    if (!partMap.has(cleanPn)) {
-      partMap.set(cleanPn, {
+    validRepairs.push({
+      pn: cleanPn,
+      desc: cleanDesc,
+      catId,
+      siteId: matchedSite.id,
+      siteName: matchedSite.name,
+      monthIdx,
+      qty: rawQty
+    });
+
+    if (!partMap.has(cleanDesc)) {
+      partMap.set(cleanDesc, {
         partNumber: cleanPn,
         description: cleanDesc,
         category_id: catId,
-        months: [0, 0, 0, 0, 0, 0, 0, 0],
+        months: [0, 0, 0, 0, 0, 0, 0],
         siteCounts: {}
       });
     }
 
-    const pData = partMap.get(cleanPn);
-    while (pData.months.length <= monthIdx) {
-      pData.months.push(0);
+    const pData = partMap.get(cleanDesc);
+    if (monthIdx >= 0 && monthIdx < 7) {
+      pData.months[monthIdx] = (pData.months[monthIdx] || 0) + rawQty;
     }
-    pData.months[monthIdx] = (pData.months[monthIdx] || 0) + rawQty;
-    pData.siteCounts[matchedSiteId] = (pData.siteCounts[matchedSiteId] || 0) + rawQty;
+    pData.siteCounts[matchedSite.id] = (pData.siteCounts[matchedSite.id] || 0) + rawQty;
+    pData.siteCounts[matchedSite.name] = (pData.siteCounts[matchedSite.name] || 0) + rawQty;
   }
 
-  const finalSitesList = existingSites.length > 0 ? [...existingSites] : [];
-  discoveredSites.forEach(s => {
-    if (s.id && !finalSitesList.some(es => es.id === s.id)) {
-      finalSitesList.push(s);
-    }
-  });
+  // Canonical ordering for Displays and Batteries matching Master Allocation Sheet
+  const CANONICAL_DISPLAY_DESCS = [
+    'Display, iPhone 13',
+    'Display, iPhone 13 Pro',
+    'Display, iPhone 13 Pro Max',
+    'Display, iPhone 14',
+    'Display, iPhone 14 Plus',
+    'Display, iPhone 14 Pro',
+    'Display, iPhone 14 Pro Max',
+    'Display, iPhone 15',
+    'Display, iPhone 15 Plus',
+    'Display, iPhone 15 Pro',
+    'Display, iPhone 15 Pro Max',
+    'Display, iPhone 16',
+    'Display, iPhone 16 Plus',
+    'Display, iPhone 16 Pro',
+    'Display, iPhone 16 Pro Max',
+    'Display, iPhone 16e',
+    'Display, iPhone 17',
+    'Display, iPhone 17 Pro',
+    'Display, iPhone 17 Pro Max',
+    'Display, iPhone 17e',
+    'Display, iPhone Air'
+  ];
+
+  const CANONICAL_BATTERY_DESCS = [
+    'Battery, iPhone 13',
+    'Battery, iPhone 13 Pro',
+    'Battery, iPhone 13 Pro Max',
+    'Battery, iPhone 14',
+    'Battery, iPhone 14 Plus',
+    'Battery, iPhone 14 Pro',
+    'Battery, iPhone 14 Pro Max',
+    'Battery, iPhone 15',
+    'Battery, iPhone 15 Plus',
+    'Battery, iPhone 15 Pro',
+    'Battery, iPhone 15 Pro Max',
+    'Battery, iPhone 16',
+    'Battery, iPhone 16 Pro',
+    'Battery, iPhone 16 Pro Max',
+    'Battery, iPhone 17',
+    'Battery, iPhone Air',
+    'Battery, pSIM, iPhone 17 Pro',
+    'Battery, pSIM, iPhone 17 Pro Max'
+  ];
+
+  // Helper to build 2D share matrix for a list of canonical models
+  function buildCategoryShareMatrix(descList) {
+    return descList.map(desc => {
+      let totalCount = 0;
+      const countsPerSite = activeServiceSites.map(s => {
+        let count = 0;
+        validRepairs.forEach(r => {
+          if (r.desc === desc && (r.siteId === s.id || r.siteName === s.name)) {
+            count += r.qty;
+          }
+        });
+        totalCount += count;
+        return count;
+      });
+
+      return countsPerSite.map(count => totalCount > 0 ? (count / totalCount) : 0);
+    });
+  }
+
+  const displayShareMatrix = buildCategoryShareMatrix(CANONICAL_DISPLAY_DESCS);
+  const batteryShareMatrix = buildCategoryShareMatrix(CANONICAL_BATTERY_DESCS);
 
   const forecastItems = [];
   const allocations = [];
   const parts = [];
-  const nonDcBranchSites = finalSitesList.filter(s => !s.is_dc);
 
-  partMap.forEach((data, pn) => {
-    // Only pass historical months (e.g. Jan..Jul) prior to target month
-    const historyMonths = data.months.length > targetMonthIdx
-      ? data.months.slice(0, targetMonthIdx)
-      : (data.months.length > 1 ? data.months.slice(0, data.months.length - 1) : data.months);
-    const computedForecast = calculateLinearRegressionForecast(historyMonths, targetMonthIdx + 1);
+  let currentRowNumber = 3; // Excel row 3 starts for Displays
+
+  // 1. Process Displays
+  CANONICAL_DISPLAY_DESCS.forEach((desc, matrixRowIdx) => {
+    const pData = partMap.get(desc) || {
+      partNumber: Object.entries(MASTER_PART_PRICING).find(([k, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
+      description: desc,
+      category_id: 'cat-display',
+      months: [0, 0, 0, 0, 0, 0, 0],
+      siteCounts: {}
+    };
+
+    const pn = pData.partNumber;
+    const computedForecast = calculateLinearRegressionForecast(pData.months, 8);
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
 
     forecastItems.push({
       part_id: `part-${pn}`,
       part_number: pn,
-      description: data.description,
-      category_id: data.category_id,
-      ytd_monthly_counts: data.months,
+      description: desc,
+      category_id: 'cat-display',
+      ytd_monthly_counts: pData.months,
       computed_forecast: computedForecast,
       admin_override: null,
       final_forecast: computedForecast,
@@ -851,44 +1065,133 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       recommended_order: recOrder.recommendedOrder
     });
 
-    const siteDemands = nonDcBranchSites.map(s => ({
-      siteId: s.id,
-      historicalDemand: data.siteCounts[s.id] || 0
-    }));
-
-    const allocatedResults = calculateProportionalAllocation(computedForecast, siteDemands);
+    const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, displayShareMatrix, matrixRowIdx);
     const siteQuantities = {};
-    allocatedResults.forEach(res => {
-      siteQuantities[res.siteId] = res.allocatedQty;
+    let totalAlloc = 0;
+    activeServiceSites.forEach((s, sIdx) => {
+      const q = allocatedBranchQuantities[sIdx] || 0;
+      siteQuantities[s.id] = q;
+      siteQuantities[s.code] = q;
+      totalAlloc += q;
     });
 
-    const split = calculateWeeklySplit(computedForecast, 0);
+    const pricing = lookupPartPrice(pn, desc, existingParts);
+    const totalCost = totalAlloc * pricing.stockingPrice;
+    const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
 
     allocations.push({
       part_id: `part-${pn}`,
       part_number: pn,
-      description: data.description,
-      category_id: data.category_id,
+      description: desc,
+      category_id: 'cat-display',
       forecasted_qty: computedForecast,
-      stocking_price: data.category_id === 'cat-display' ? 280 : 99,
-      total_allocated_qty: computedForecast,
-      w1_qty: split.week1,
-      w2_qty: split.week2,
-      w3_qty: split.week3,
-      w4_qty: split.week4,
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
+      total_allocated_qty: totalAlloc,
+      total_stock_cost: totalCost,
+      w1_qty: split.w1_qty,
+      w2_qty: split.w2_qty,
+      w3_qty: split.w3_qty,
+      w4_qty: split.w4_qty,
+      w1_cost: split.w1_cost,
+      w2_cost: split.w2_cost,
+      w3_cost: split.w3_cost,
+      w4_cost: split.w4_cost,
       site_quantities: siteQuantities
     });
 
     parts.push({
       id: `part-${pn}`,
       part_number: pn,
-      description: data.description,
-      category_id: data.category_id,
-      iphone_model: data.description.replace(/^(Battery|Display),?\s*/i, ''),
-      stocking_price: data.category_id === 'cat-display' ? 280 : 99,
+      description: desc,
+      category_id: 'cat-display',
+      iphone_model: desc.replace(/^(Battery|Display),?\s*/i, ''),
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
       safety_stock_pct: 0.05,
       is_active: true
     });
+
+    currentRowNumber++;
+  });
+
+  currentRowNumber++; // Skip subtotal row to match Excel parity for Batteries (row 25)
+
+  // 2. Process Batteries
+  CANONICAL_BATTERY_DESCS.forEach((desc, matrixRowIdx) => {
+    const pData = partMap.get(desc) || {
+      partNumber: Object.entries(MASTER_PART_PRICING).find(([k, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
+      description: desc,
+      category_id: 'cat-battery',
+      months: [0, 0, 0, 0, 0, 0, 0],
+      siteCounts: {}
+    };
+
+    const pn = pData.partNumber;
+    const computedForecast = calculateLinearRegressionForecast(pData.months, 8);
+    const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
+
+    forecastItems.push({
+      part_id: `part-${pn}`,
+      part_number: pn,
+      description: desc,
+      category_id: 'cat-battery',
+      ytd_monthly_counts: pData.months,
+      computed_forecast: computedForecast,
+      admin_override: null,
+      final_forecast: computedForecast,
+      safety_stock_units: recOrder.safetyUnits,
+      recommended_order: recOrder.recommendedOrder
+    });
+
+    const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, batteryShareMatrix, matrixRowIdx);
+    const siteQuantities = {};
+    let totalAlloc = 0;
+    activeServiceSites.forEach((s, sIdx) => {
+      const q = allocatedBranchQuantities[sIdx] || 0;
+      siteQuantities[s.id] = q;
+      siteQuantities[s.code] = q;
+      totalAlloc += q;
+    });
+
+    const pricing = lookupPartPrice(pn, desc, existingParts);
+    const totalCost = totalAlloc * pricing.stockingPrice;
+    const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
+
+    allocations.push({
+      part_id: `part-${pn}`,
+      part_number: pn,
+      description: desc,
+      category_id: 'cat-battery',
+      forecasted_qty: computedForecast,
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
+      total_allocated_qty: totalAlloc,
+      total_stock_cost: totalCost,
+      w1_qty: split.w1_qty,
+      w2_qty: split.w2_qty,
+      w3_qty: split.w3_qty,
+      w4_qty: split.w4_qty,
+      w1_cost: split.w1_cost,
+      w2_cost: split.w2_cost,
+      w3_cost: split.w3_cost,
+      w4_cost: split.w4_cost,
+      site_quantities: siteQuantities
+    });
+
+    parts.push({
+      id: `part-${pn}`,
+      part_number: pn,
+      description: desc,
+      category_id: 'cat-battery',
+      iphone_model: desc.replace(/^(Battery|Display),?\s*/i, ''),
+      stocking_price: pricing.stockingPrice,
+      exchange_price: pricing.exchangePrice,
+      safety_stock_pct: 0.05,
+      is_active: true
+    });
+
+    currentRowNumber++;
   });
 
   return {
@@ -896,37 +1199,571 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     forecastItems,
     allocations,
     parts,
-    sites: finalSitesList,
+    sites: activeServiceSites,
     totalRawRowsRead,
     filteredOutCount
   };
 }
 
-export function exportAllocationToExcel(allocations, sites, period = 'August 2026') {
-  const headers = ['Part Number', 'Description', 'Total Allocated', 'Week 1', 'Week 2', 'Week 3', 'Week 4'];
-  sites.forEach(s => headers.push(s.code));
+export async function exportAllocationToExcel(allocations, sites, period = 'August 2026') {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Mobile Care Services Phils. Inc.';
+  workbook.lastModifiedBy = 'MDC DC System 2';
+  workbook.created = new Date();
+  workbook.modified = new Date();
 
-  const rows = allocations.map(item => {
-    const split = calculateWeeklySplit(item.total_allocated_qty, 0);
-    const r = [
-      item.part_number,
-      item.description,
-      item.total_allocated_qty,
-      split.week1,
-      split.week2,
-      split.week3,
-      split.week4
-    ];
-    sites.forEach(s => {
-      r.push(item.site_quantities?.[s.id] || 0);
-    });
-    return r;
+  const worksheet = workbook.addWorksheet('Master Allocation', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 }, // A4 Landscape
+    views: [{ state: 'frozen', xSplit: 3, ySplit: 4 }]
   });
 
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Master Allocation');
-  XLSX.writeFile(wb, `Master_Allocation_${period.replace(/\s+/g, '_')}.xlsx`);
+  // Calculate high-level summary metrics
+  const totalPartsAll = allocations.reduce((sum, it) => sum + (it.total_allocated_qty || 0), 0);
+  let totalValueAll = 0;
+  allocations.forEach(it => {
+    const price = it.stocking_price || (it.description?.toLowerCase().includes('display') ? 279 : 99);
+    totalValueAll += (it.total_allocated_qty || 0) * price;
+  });
+
+  function getExcelColLetter(colIndex) {
+    let temp, letter = '';
+    while (colIndex > 0) {
+      temp = (colIndex - 1) % 26;
+      letter = String.fromCharCode(temp + 65) + letter;
+      colIndex = Math.floor((colIndex - temp - 1) / 26);
+    }
+    return letter;
+  }
+
+  const lastColNum = 5 + sites.length + 11;
+  const lastColLetter = getExcelColLetter(lastColNum);
+
+  // 1. Title Banner (Row 1)
+  worksheet.mergeCells(`A1:${lastColLetter}1`);
+  const titleCell = worksheet.getCell('A1');
+  titleCell.value = `MOBILE CARE SERVICES PHILS. INC. — Master Allocation Matrix & Weekly Batches (${period})`;
+  titleCell.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } }; // Dark Navy
+  titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  worksheet.getRow(1).height = 28;
+
+  // 2. Subtitle / Metadata (Row 2)
+  worksheet.mergeCells(`A2:${lastColLetter}2`);
+  const subTitleCell = worksheet.getCell('A2');
+  subTitleCell.value = `Multi-Site Proportional Allocation across ${sites.length} Branches • 4-Week Delivery Schedules • Valuation Grand Totals`;
+  subTitleCell.font = { name: 'Arial', size: 9.5, italic: true, color: { argb: 'FF94A3B8' } };
+  subTitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+  subTitleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  worksheet.getRow(2).height = 18;
+
+  // 3. KPI Highlights Banner (Row 3)
+  worksheet.mergeCells('A3:D3');
+  const kpi1 = worksheet.getCell('A3');
+  kpi1.value = `TOTAL PARTS: ${totalPartsAll.toLocaleString()} units`;
+  kpi1.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+  kpi1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } }; // Blue
+  kpi1.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  worksheet.mergeCells('E3:J3');
+  const kpi2 = worksheet.getCell('E3');
+  kpi2.value = `ACTIVE SERVICE BRANCHES: ${sites.length} sites`;
+  kpi2.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+  kpi2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
+  kpi2.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  worksheet.mergeCells(`K3:${lastColLetter}3`);
+  const kpi3 = worksheet.getCell('K3');
+  kpi3.value = `TOTAL MASTER VALUATION: $${totalValueAll.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  kpi3.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+  kpi3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF15803D' } }; // Green
+  kpi3.alignment = { horizontal: 'center', vertical: 'middle' };
+  worksheet.getRow(3).height = 22;
+
+  // 4. Main Table Header (Row 4)
+  const headers = [
+    'Commodity',
+    'Part Number',
+    'Description',
+    'Stock Price',
+    'Exchange Price',
+    ...sites.map(s => s.code),
+    'Total Parts',
+    'Total Stock Price',
+    'W1 Qty',
+    'W1 Total ($)',
+    'W2 Qty',
+    'W2 Total ($)',
+    'W3 Qty',
+    'W3 Total ($)',
+    'W4 Qty',
+    'W4 Total ($)',
+    'Remarks'
+  ];
+
+  const headerRow = worksheet.addRow(headers);
+  headerRow.height = 28;
+
+  headerRow.eachCell((cell, colNum) => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FF334155' } },
+      bottom: { style: 'medium', color: { argb: 'FF0284C7' } },
+      left: { style: 'thin', color: { argb: 'FF334155' } },
+      right: { style: 'thin', color: { argb: 'FF334155' } }
+    };
+
+    if (colNum <= 3) {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    } else if (colNum === 4 || colNum === 5) {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    } else if (colNum > 5 && colNum <= 5 + sites.length) {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+      cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF38BDF8' } };
+    } else if (colNum === 5 + sites.length + 1) {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } };
+    } else if (colNum === 5 + sites.length + 2) {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0369A1' } };
+    } else if (colNum >= 5 + sites.length + 3 && colNum <= 5 + sites.length + 10) {
+      const isQty = (colNum - (5 + sites.length + 3)) % 2 === 0;
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isQty ? 'FF334155' : 'FF1E293B' } };
+      cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: isQty ? 'FFFFFFFF' : 'FF38BDF8' } };
+    } else {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    }
+  });
+
+  const displayItems = allocations.filter(it => it.category_id === 'cat-display' || it.description?.toLowerCase().includes('display'));
+  const batteryItems = allocations.filter(it => it.category_id === 'cat-battery' || it.description?.toLowerCase().includes('battery') || !displayItems.includes(it));
+
+  const addCategorySection = (items, catLabel, catColor, catText) => {
+    let subtotalQty = 0;
+    let subtotalCost = 0;
+    let subtotalW1 = 0, subtotalW1Cost = 0;
+    let subtotalW2 = 0, subtotalW2Cost = 0;
+    let subtotalW3 = 0, subtotalW3Cost = 0;
+    let subtotalW4 = 0, subtotalW4Cost = 0;
+    const subtotalSites = {};
+
+    items.forEach((item, idx) => {
+      const stockPrice = item.stocking_price || 0;
+      const exchangePrice = item.exchange_price || 0;
+      const totalQty = item.total_allocated_qty || 0;
+      const totalCost = item.total_stock_cost || (totalQty * stockPrice);
+      const split = calculateWeeklySplit(totalQty, totalCost, idx + 3);
+
+      subtotalQty += totalQty;
+      subtotalCost += totalCost;
+      subtotalW1 += split.w1_qty; subtotalW1Cost += split.w1_cost;
+      subtotalW2 += split.w2_qty; subtotalW2Cost += split.w2_cost;
+      subtotalW3 += split.w3_qty; subtotalW3Cost += split.w3_cost;
+      subtotalW4 += split.w4_qty; subtotalW4Cost += split.w4_cost;
+
+      const rowValues = [
+        catLabel,
+        item.part_number,
+        item.description,
+        stockPrice,
+        exchangePrice
+      ];
+
+      sites.forEach(s => {
+        const q = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
+        subtotalSites[s.id] = (subtotalSites[s.id] || 0) + q;
+        rowValues.push(q);
+      });
+
+      rowValues.push(
+        totalQty,
+        totalCost,
+        split.w1_qty,
+        split.w1_cost,
+        split.w2_qty,
+        split.w2_cost,
+        split.w3_qty,
+        split.w3_cost,
+        split.w4_qty,
+        split.w4_cost,
+        totalQty > 0 ? 'ORDER REQUIRED' : 'NO NEED TO ORDER'
+      );
+
+      const dRow = worksheet.addRow(rowValues);
+      dRow.height = 20;
+
+      const isOrderRequired = totalQty > 0;
+
+      dRow.eachCell({ includeEmpty: true }, (cell, cNum) => {
+        cell.font = { name: 'Arial', size: 9 };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+          right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+        };
+
+        if (cNum === 1) {
+          cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: catText } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: catColor } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        } else if (cNum === 2) {
+          cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        } else if (cNum === 3) {
+          cell.alignment = { horizontal: 'left', vertical: 'middle' };
+        } else if (cNum === 4 || cNum === 5) {
+          cell.numFmt = '$#,##0.00';
+          cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        } else if (cNum > 5 && cNum <= 5 + sites.length) {
+          const val = Number(cell.value) || 0;
+          if (val > 0) {
+            cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF15803D' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+          } else {
+            cell.font = { name: 'Arial', size: 9, color: { argb: 'FF94A3B8' } };
+          }
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        } else if (cNum === 5 + sites.length + 1) {
+          cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF0369A1' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0F2FE' } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        } else if (cNum === 5 + sites.length + 2) {
+          cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF0F172A' } };
+          cell.numFmt = '$#,##0.00';
+          cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        } else if (cNum >= 5 + sites.length + 3 && cNum <= 5 + sites.length + 10) {
+          const isQty = (cNum - (5 + sites.length + 3)) % 2 === 0;
+          if (isQty) {
+            cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          } else {
+            cell.numFmt = '$#,##0.00';
+            cell.alignment = { horizontal: 'right', vertical: 'middle' };
+          }
+        } else if (cNum === lastColNum) {
+          if (isOrderRequired) {
+            cell.font = { name: 'Arial', size: 8, bold: true, color: { argb: 'FF15803D' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+          } else {
+            cell.font = { name: 'Arial', size: 8, bold: true, color: { argb: 'FF64748B' } };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } };
+          }
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+      });
+    });
+
+    const subtotalValues = [
+      catLabel,
+      'SUB-TOTAL',
+      `${items.length} Parts Sub-Total`,
+      '',
+      ''
+    ];
+    sites.forEach(s => {
+      subtotalValues.push(subtotalSites[s.id] || 0);
+    });
+    subtotalValues.push(
+      subtotalQty,
+      subtotalCost,
+      subtotalW1,
+      subtotalW1Cost,
+      subtotalW2,
+      subtotalW2Cost,
+      subtotalW3,
+      subtotalW3Cost,
+      subtotalW4,
+      subtotalW4Cost,
+      ''
+    );
+
+    const subRow = worksheet.addRow(subtotalValues);
+    subRow.height = 22;
+    subRow.eachCell((cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: catText } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: catColor } };
+      cell.border = {
+        top: { style: 'medium', color: { argb: 'FF94A3B8' } },
+        bottom: { style: 'medium', color: { argb: 'FF94A3B8' } },
+        left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+        right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+      };
+
+      if (cNum === 4 || cNum === 5 || cNum === 5 + sites.length + 2 || cNum === 5 + sites.length + 4 || cNum === 5 + sites.length + 6 || cNum === 5 + sites.length + 8 || cNum === 5 + sites.length + 10) {
+        cell.numFmt = '$#,##0.00';
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      } else {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      }
+    });
+
+    return {
+      qty: subtotalQty,
+      cost: subtotalCost,
+      w1: subtotalW1, w1Cost: subtotalW1Cost,
+      w2: subtotalW2, w2Cost: subtotalW2Cost,
+      w3: subtotalW3, w3Cost: subtotalW3Cost,
+      w4: subtotalW4, w4Cost: subtotalW4Cost,
+      sites: subtotalSites
+    };
+  };
+
+  const displaySummary = addCategorySection(displayItems, 'DISPLAY', 'FFE0F2FE', 'FF0369A1');
+  const batterySummary = addCategorySection(batteryItems, 'BATTERY', 'FFDCFCE7', 'FF15803D');
+
+  // 5. Grand Total Rows
+  const grandUnits = [
+    'TOTAL',
+    'PARTS',
+    'TOTAL PARTS PER SITE',
+    '',
+    ''
+  ];
+  sites.forEach(s => {
+    grandUnits.push((displaySummary.sites[s.id] || 0) + (batterySummary.sites[s.id] || 0));
+  });
+  grandUnits.push(
+    totalPartsAll,
+    '',
+    displaySummary.w1 + batterySummary.w1,
+    '',
+    displaySummary.w2 + batterySummary.w2,
+    '',
+    displaySummary.w3 + batterySummary.w3,
+    '',
+    displaySummary.w4 + batterySummary.w4,
+    '',
+    'TOTAL PLAN'
+  );
+
+  const gUnitsRow = worksheet.addRow(grandUnits);
+  gUnitsRow.height = 24;
+  gUnitsRow.eachCell((cell) => {
+    cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = {
+      top: { style: 'medium', color: { argb: 'FF38BDF8' } },
+      bottom: { style: 'thin', color: { argb: 'FF334155' } },
+      left: { style: 'thin', color: { argb: 'FF334155' } },
+      right: { style: 'thin', color: { argb: 'FF334155' } }
+    };
+  });
+
+  const grandCosts = [
+    'COST',
+    'VALUATION',
+    'TOTAL COST BREAKDOWN',
+    '',
+    ''
+  ];
+  sites.forEach(s => {
+    let siteCost = 0;
+    allocations.forEach(item => {
+      const p = item.stocking_price || 0;
+      const q = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
+      siteCost += q * p;
+    });
+    grandCosts.push(siteCost);
+  });
+  grandCosts.push(
+    '',
+    totalValueAll,
+    '',
+    displaySummary.w1Cost + batterySummary.w1Cost,
+    '',
+    displaySummary.w2Cost + batterySummary.w2Cost,
+    '',
+    displaySummary.w3Cost + batterySummary.w3Cost,
+    '',
+    displaySummary.w4Cost + batterySummary.w4Cost,
+    ''
+  );
+
+  const gCostRow = worksheet.addRow(grandCosts);
+  gCostRow.height = 24;
+  gCostRow.eachCell((cell, cNum) => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF38BDF8' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FF334155' } },
+      bottom: { style: 'double', color: { argb: 'FF38BDF8' } },
+      left: { style: 'thin', color: { argb: 'FF334155' } },
+      right: { style: 'thin', color: { argb: 'FF334155' } }
+    };
+
+    if ((cNum > 5 && cNum <= 5 + sites.length) || cNum === 5 + sites.length + 2 || cNum === 5 + sites.length + 4 || cNum === 5 + sites.length + 6 || cNum === 5 + sites.length + 8 || cNum === 5 + sites.length + 10) {
+      cell.numFmt = '$#,##0.00';
+      cell.alignment = { horizontal: 'right', vertical: 'middle' };
+    } else {
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+  });
+
+  worksheet.getColumn(1).width = 12;
+  worksheet.getColumn(2).width = 15;
+  worksheet.getColumn(3).width = 30;
+  worksheet.getColumn(4).width = 13;
+  worksheet.getColumn(5).width = 13;
+  sites.forEach((s, idx) => {
+    worksheet.getColumn(6 + idx).width = 9;
+  });
+  const offset = 6 + sites.length;
+  worksheet.getColumn(offset).width = 12;
+  worksheet.getColumn(offset + 1).width = 16;
+  worksheet.getColumn(offset + 2).width = 9;
+  worksheet.getColumn(offset + 3).width = 13;
+  worksheet.getColumn(offset + 4).width = 9;
+  worksheet.getColumn(offset + 5).width = 13;
+  worksheet.getColumn(offset + 6).width = 9;
+  worksheet.getColumn(offset + 7).width = 13;
+  worksheet.getColumn(offset + 8).width = 9;
+  worksheet.getColumn(offset + 9).width = 13;
+  worksheet.getColumn(offset + 10).width = 18;
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Master_Allocation_${period.replace(/\s+/g, '_')}.xlsx`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+export async function exportForecastToExcel(forecastItems, period = 'August 2026') {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Mobile Care Services Phils. Inc.';
+  workbook.lastModifiedBy = 'MDC DC System 2';
+  workbook.created = new Date();
+
+  const worksheet = workbook.addWorksheet('August Forecast', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul'];
+
+  // Title Banner
+  worksheet.mergeCells('A1:M1');
+  const tCell = worksheet.getCell('A1');
+  tCell.value = `MOBILE CARE SERVICES PHILS. INC. — Demand Forecasting Engine (${period})`;
+  tCell.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  tCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  tCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  worksheet.getRow(1).height = 28;
+
+  // Header Row
+  const headers = [
+    'Commodity',
+    'Part Number',
+    'Description',
+    ...months.map(m => `${m} 2026`),
+    'Computed Forecast',
+    'Admin Override',
+    'Final Recommended Order'
+  ];
+
+  const headerRow = worksheet.addRow(headers);
+  headerRow.height = 26;
+  headerRow.eachCell((cell, colNum) => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colNum > 10 ? 'FF0284C7' : 'FF1E293B' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FF334155' } },
+      bottom: { style: 'medium', color: { argb: 'FF0284C7' } },
+      left: { style: 'thin', color: { argb: 'FF334155' } },
+      right: { style: 'thin', color: { argb: 'FF334155' } }
+    };
+  });
+
+  let totalForecastQty = 0;
+
+  forecastItems.forEach((item, idx) => {
+    const isDisplay = item.category_id === 'cat-display' || item.description?.toLowerCase().includes('display');
+    const commodity = isDisplay ? 'DISPLAY' : 'BATTERY';
+    const counts = (item.ytd_monthly_counts || []).slice(0, 7);
+    while (counts.length < 7) counts.push(0);
+    const computed = calculateLinearRegressionForecast(counts, 8);
+    const finalOrder = item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== ''
+      ? parseInt(item.admin_override)
+      : (item.final_forecast || computed);
+
+    totalForecastQty += finalOrder;
+
+    const row = [
+      commodity,
+      item.part_number,
+      item.description,
+      ...counts,
+      computed,
+      item.admin_override !== null ? item.admin_override : '',
+      finalOrder
+    ];
+
+    const dRow = worksheet.addRow(row);
+    dRow.height = 20;
+
+    dRow.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+
+      if (cNum === 1) {
+        cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: isDisplay ? 'FF0369A1' : 'FF15803D' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isDisplay ? 'FFE0F2FE' : 'FFDCFCE7' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 2) {
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 3) {
+        cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      } else if (cNum >= 4 && cNum <= 10) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 11) {
+        cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF0F172A' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 12) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 13) {
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF0369A1' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0F2FE' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      }
+    });
+  });
+
+  // Footer Row
+  const footerRow = worksheet.addRow(['TOTAL', '', `${forecastItems.length} Parts Total`, '', '', '', '', '', '', '', '', '', totalForecastQty]);
+  footerRow.height = 24;
+  footerRow.eachCell((cell) => {
+    cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  worksheet.getColumn(1).width = 12;
+  worksheet.getColumn(2).width = 15;
+  worksheet.getColumn(3).width = 32;
+  for (let i = 4; i <= 10; i++) worksheet.getColumn(i).width = 10;
+  worksheet.getColumn(11).width = 16;
+  worksheet.getColumn(12).width = 14;
+  worksheet.getColumn(13).width = 20;
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Demand_Forecast_${period.replace(/\s+/g, '_')}.xlsx`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 export function downloadSampleGsxFixablyCsv(existingSites = [], existingParts = []) {
@@ -1034,12 +1871,31 @@ export async function parseScanInPartsFile(file, existingParts = [], existingUni
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: 'array' });
     
-    // Pick the first sheet with data
+    // Pick the best sheet by scoring content (prefers sheets with actual parts and serial data)
     let targetSheetName = workbook.SheetNames[0];
+    let maxScore = -1;
+
     for (const sName of workbook.SheetNames) {
-      if (/parts|intake|receive|inventory|scan/i.test(sName)) {
+      const ws = workbook.Sheets[sName];
+      if (!ws) continue;
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      if (!data || data.length === 0) continue;
+
+      let score = 0;
+      if (/parts|intake|receive|inventory|scan|stock|dc|sheet1/i.test(sName)) score += 10;
+
+      for (let r = 0; r < Math.min(25, data.length); r++) {
+        const row = data[r] || [];
+        for (const cell of row) {
+          const val = String(cell || '').trim();
+          if (/(?:ZP|PP|Z)?661-\d{4,6}/i.test(val)) score += 5;
+          if (/^[A-Z0-9]{10,20}$/i.test(val) && !/(?:ZP|PP|Z)?661-\d{4,6}/i.test(val) && !/^\d{4,8}$/.test(val)) score += 3;
+        }
+      }
+
+      if (score > maxScore) {
+        maxScore = score;
         targetSheetName = sName;
-        break;
       }
     }
 
@@ -1053,40 +1909,49 @@ export async function parseScanInPartsFile(file, existingParts = [], existingUni
       return { success: false, error: 'File is empty or contains no data rows.' };
     }
 
-    // Find header row (usually first non-empty row)
+    // Find header row: row with at least 2 non-empty cells and relevant column headers
     let headerIdx = 0;
-    for (let i = 0; i < Math.min(10, rawRows.length); i++) {
-      const rowStr = (rawRows[i] || []).map(c => String(c).toLowerCase()).join(' ');
-      if (rowStr.includes('part') || rowStr.includes('serial') || rowStr.includes('p/n') || rowStr.includes('s/n') || rowStr.includes('item')) {
+    for (let i = 0; i < Math.min(15, rawRows.length); i++) {
+      const row = rawRows[i] || [];
+      const nonEmpty = row.filter(c => String(c).trim().length > 0);
+      if (nonEmpty.length < 2) continue; // Skip single-cell banner/title rows
+      const rowStr = row.map(c => String(c).toLowerCase()).join(' ');
+      if (/(part|product|serial|kgb|kbb|code|item|s\/n|p\/n|imei|desc|order|box)/i.test(rowStr)) {
         headerIdx = i;
         break;
       }
     }
 
-    const headers = rawRows[headerIdx].map(h => String(h || '').trim());
-    const headerMap = {};
+    const headers = (rawRows[headerIdx] || []).map(h => String(h || '').trim());
+    const headerMap = {
+      pnCols: [],
+      serialCols: [],
+      descCols: [],
+      poCols: [],
+      boxCols: [],
+      qtyCols: []
+    };
 
     headers.forEach((h, colIdx) => {
-      const lower = h.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (/^(partnumber|partno|part|pn|itemnumber|itemno|partcode)$/.test(lower)) {
-        headerMap.pn = colIdx;
-      } else if (/^(serialnumber|serialno|serial|sn|imei|barcode)$/.test(lower)) {
-        headerMap.serial = colIdx;
-      } else if (/^(description|partdescription|itemdescription|desc|name|title)$/.test(lower)) {
-        headerMap.desc = colIdx;
-      } else if (/^(ponumber|pono|po|purchaseorder|ordernumber|orderid)$/.test(lower)) {
-        headerMap.po = colIdx;
-      } else if (/^(boxnumber|boxno|box|carton|package)$/.test(lower)) {
-        headerMap.box = colIdx;
-      } else if (/^(quantity|qty|count|units)$/.test(lower)) {
-        headerMap.qty = colIdx;
+      const clean = h.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (/^(partnumber|partno|partnum|partcode|pn|p\/n)$/.test(clean)) {
+        headerMap.pnCols.unshift(colIdx);
+      } else if (/^(productcode|itemnumber|itemno|itemcode|code|part)$/.test(clean)) {
+        headerMap.pnCols.push(colIdx);
+      } else if (/^(productkgb|kgbserial|kgb|serialnumber|serialno|serialnum|serial|sn|s\/n|serials|imei|barcode|scannedserial)$/.test(clean)) {
+        headerMap.serialCols.unshift(colIdx);
+      } else if (/^(productkbb|kbbserial|kbb)$/.test(clean)) {
+        headerMap.serialCols.push(colIdx);
+      } else if (/^(productdescription|partdescription|itemdescription|description|desc|productname|partname|itemname|name|title)$/.test(clean)) {
+        headerMap.descCols.push(colIdx);
+      } else if (/^(orderid|ordernumber|ponumber|pono|po|purchaseorder)$/.test(clean)) {
+        headerMap.poCols.push(colIdx);
+      } else if (/^(boxnumber|boxno|box|carton|package)$/.test(clean)) {
+        headerMap.boxCols.push(colIdx);
+      } else if (/^(quantity|qty|count|units)$/.test(clean)) {
+        headerMap.qtyCols.push(colIdx);
       }
     });
-
-    // Fallback if header names weren't perfectly matched
-    if (headerMap.pn === undefined && headers.length > 0) headerMap.pn = 0;
-    if (headerMap.serial === undefined && headers.length > 1) headerMap.serial = 1;
-    if (headerMap.desc === undefined && headers.length > 2) headerMap.desc = 2;
 
     const parsedItems = [];
     const seenSerialsInBatch = new Set();
@@ -1098,12 +1963,74 @@ export async function parseScanInPartsFile(file, existingParts = [], existingUni
         continue; // Skip empty rows
       }
 
-      const rawPn = headerMap.pn !== undefined ? String(row[headerMap.pn] || '').trim() : '';
-      let rawSerial = headerMap.serial !== undefined ? String(row[headerMap.serial] || '').trim() : '';
-      const rawDesc = headerMap.desc !== undefined ? String(row[headerMap.desc] || '').trim() : '';
-      const rawPo = headerMap.po !== undefined ? String(row[headerMap.po] || '').trim() : '';
-      const rawBox = headerMap.box !== undefined ? parseInt(row[headerMap.box], 10) || 1 : 1;
-      const rawQty = headerMap.qty !== undefined ? parseInt(row[headerMap.qty], 10) || 1 : 1;
+      // Extract Part Number from mapped columns
+      let rawPn = '';
+      for (const col of headerMap.pnCols) {
+        const val = String(row[col] || '').trim();
+        if (val) { rawPn = val; break; }
+      }
+
+      // Extract Serial Number from mapped columns
+      let rawSerial = '';
+      for (const col of headerMap.serialCols) {
+        const val = String(row[col] || '').trim();
+        if (val && !/^(n\/?a|none|null|-)$/i.test(val)) { rawSerial = val; break; }
+      }
+
+      // Extract Description
+      let rawDesc = '';
+      for (const col of headerMap.descCols) {
+        const val = String(row[col] || '').trim();
+        if (val) { rawDesc = val; break; }
+      }
+
+      // Extract PO Number
+      let rawPo = '';
+      for (const col of headerMap.poCols) {
+        const val = String(row[col] || '').trim();
+        if (val) { rawPo = val; break; }
+      }
+
+      // Extract Box Number
+      let rawBox = 1;
+      for (const col of headerMap.boxCols) {
+        const parsed = parseInt(row[col], 10);
+        if (!isNaN(parsed) && parsed > 0) { rawBox = parsed; break; }
+      }
+
+      // Per-row intelligent data-driven scan if Part Number or Serial is missing
+      if (!rawPn || !rawSerial) {
+        row.forEach((cell, cellIdx) => {
+          const val = String(cell || '').trim();
+          if (!val) return;
+
+          // Check if cell is an Apple Part Number
+          if (!rawPn && (/(?:ZP|PP|Z)?661-\d{4,6}/i.test(val) || existingParts.some(p => p.part_number.toUpperCase() === val.toUpperCase()))) {
+            rawPn = val;
+          }
+          // Check if cell is an Apple Serial Number (alphanumeric 10-20 chars, not PN, not short number)
+          else if (!rawSerial && /^[A-Z0-9]{10,20}$/i.test(val) && !/(?:ZP|PP|Z)?661-\d{4,6}/i.test(val) && !/^\d{4,8}$/.test(val) && !headerMap.poCols.includes(cellIdx)) {
+            rawSerial = val;
+          }
+        });
+      }
+
+      // Skip Excel summary, total, subtotal, and count footer rows (e.g. "80 TOTAL" or "GRAND TOTAL")
+      const isSummaryRow = row.some(cell => {
+        const str = String(cell || '').trim();
+        return /^(total|totals|grand total|grandtotal|subtotal|sub-total|count|total count|summary|all totals|report total|end of report|page \d+.*)$/i.test(str);
+      });
+      if (isSummaryRow && (!rawSerial || /^(total|subtotal|count)$/i.test(rawSerial))) {
+        continue;
+      }
+      if (/^(total|totals|grand total|subtotal|count|summary|end of report)$/i.test(rawPn)) {
+        continue;
+      }
+      if (/^\d{1,4}$/.test(rawPn) && !existingParts.some(p => p.part_number.toUpperCase() === rawPn.toUpperCase())) {
+        if (!rawSerial || /^(total|subtotal|count)$/i.test(rawDesc) || !rawDesc) {
+          continue;
+        }
+      }
 
       if (!rawPn && !rawSerial) {
         continue;
@@ -1131,50 +2058,47 @@ export async function parseScanInPartsFile(file, existingParts = [], existingUni
         }
       }
 
-      // Quantity expansion if quantity > 1 and multiple items need to be generated
-      const itemsToGenerate = Math.max(1, rawQty);
-
-      for (let q = 0; q < itemsToGenerate; q++) {
-        let currentSerial = rawSerial;
-        if (!currentSerial || (q > 0 && currentSerial === rawSerial)) {
-          // Generate unique serial if missing or multi-quantity
-          currentSerial = `AUTO-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-        }
-        
-        const cleanSerial = currentSerial.toUpperCase();
-        let status = 'VALID';
-        let statusMessage = 'Ready to Import';
-
-        if (!cleanPN) {
-          status = 'ERROR';
-          statusMessage = 'Missing Part Number';
-        } else if (existingSerialsSet.has(cleanSerial)) {
-          status = 'DUPLICATE';
-          statusMessage = 'Serial already in DC inventory';
-        } else if (seenSerialsInBatch.has(cleanSerial)) {
-          status = 'DUPLICATE';
-          statusMessage = 'Duplicate Serial in file';
-        } else if (!existingPart) {
-          status = 'NEW_PART';
-          statusMessage = 'New Part (will auto-register in catalog)';
-        }
-
-        seenSerialsInBatch.add(cleanSerial);
-
-        parsedItems.push({
-          id: `batch-${i}-${q}-${Math.random().toString(36).substr(2, 5)}`,
-          rowNumber: i + 1,
-          partNumber: cleanPN,
-          serialNumber: cleanSerial,
-          description: partDesc,
-          poId: matchedPoId,
-          poNumber: matchedPoNumber || rawPo || null,
-          boxNumber: rawBox,
-          status,
-          statusMessage,
-          isExistingPart: !!existingPart
-        });
+      // If serial is completely missing in file row, auto-generate fallback
+      let currentSerial = rawSerial;
+      let isAutoGeneratedSerial = false;
+      if (!currentSerial) {
+        currentSerial = `AUTO-${Date.now().toString().slice(-6)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        isAutoGeneratedSerial = true;
       }
+      
+      const cleanSerial = currentSerial.toUpperCase();
+      let status = 'VALID';
+      let statusMessage = isAutoGeneratedSerial ? 'Auto-assigned Serial (Missing from file)' : 'Ready to Import';
+
+      if (!cleanPN) {
+        status = 'ERROR';
+        statusMessage = 'Missing Part Number';
+      } else if (existingSerialsSet.has(cleanSerial)) {
+        status = 'DUPLICATE';
+        statusMessage = 'Serial already in DC inventory';
+      } else if (seenSerialsInBatch.has(cleanSerial)) {
+        status = 'DUPLICATE';
+        statusMessage = 'Duplicate Serial in file';
+      } else if (!existingPart) {
+        status = 'NEW_PART';
+        statusMessage = 'New Part (will auto-register in catalog)';
+      }
+
+      seenSerialsInBatch.add(cleanSerial);
+
+      parsedItems.push({
+        id: `batch-${i}-${Math.random().toString(36).substr(2, 5)}`,
+        rowNumber: i + 1,
+        partNumber: cleanPN,
+        serialNumber: cleanSerial,
+        description: partDesc,
+        poId: matchedPoId,
+        poNumber: matchedPoNumber || rawPo || null,
+        boxNumber: rawBox,
+        status,
+        statusMessage,
+        isExistingPart: !!existingPart
+      });
     }
 
     if (parsedItems.length === 0) {
@@ -1270,11 +2194,26 @@ export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: 'array' });
     
+    // Pick the best sheet by scoring content
     let targetSheetName = workbook.SheetNames[0];
+    let maxScore = -1;
     for (const sName of workbook.SheetNames) {
-      if (/pack|out|ship|manifest|scan/i.test(sName)) {
+      const ws = workbook.Sheets[sName];
+      if (!ws) continue;
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      if (!data || data.length === 0) continue;
+
+      let score = 0;
+      if (/pack|out|ship|manifest|scan|parts|inventory/i.test(sName)) score += 10;
+      for (let r = 0; r < Math.min(25, data.length); r++) {
+        for (const cell of (data[r] || [])) {
+          const val = String(cell || '').trim();
+          if (/^[A-Z0-9]{10,20}$/i.test(val)) score += 3;
+        }
+      }
+      if (score > maxScore) {
+        maxScore = score;
         targetSheetName = sName;
-        break;
       }
     }
 
@@ -1289,34 +2228,44 @@ export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [
     }
 
     let headerIdx = 0;
-    for (let i = 0; i < Math.min(10, rawRows.length); i++) {
-      const rowStr = (rawRows[i] || []).map(c => String(c).toLowerCase()).join(' ');
-      if (rowStr.includes('part') || rowStr.includes('serial') || rowStr.includes('box') || rowStr.includes('site') || rowStr.includes('p/n')) {
+    for (let i = 0; i < Math.min(15, rawRows.length); i++) {
+      const row = rawRows[i] || [];
+      const nonEmpty = row.filter(c => String(c).trim().length > 0);
+      if (nonEmpty.length < 2) continue;
+      const rowStr = row.map(c => String(c).toLowerCase()).join(' ');
+      if (/(part|serial|box|site|p\/n|s\/n|kgb|kbb|code|branch)/i.test(rowStr)) {
         headerIdx = i;
         break;
       }
     }
 
-    const headers = rawRows[headerIdx].map(h => String(h || '').trim());
-    const headerMap = {};
+    const headers = (rawRows[headerIdx] || []).map(h => String(h || '').trim());
+    const headerMap = {
+      pnCols: [],
+      serialCols: [],
+      boxCols: [],
+      siteCols: [],
+      notesCols: []
+    };
 
     headers.forEach((h, colIdx) => {
       const lower = h.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (/^(partnumber|partno|part|pn|itemnumber|itemno)$/.test(lower)) {
-        headerMap.pn = colIdx;
-      } else if (/^(serialnumber|serialno|serial|sn|barcode|imei)$/.test(lower)) {
-        headerMap.serial = colIdx;
+      if (/^(partnumber|partno|partnum|partcode|pn|p\/n)$/.test(lower)) {
+        headerMap.pnCols.unshift(colIdx);
+      } else if (/^(productcode|itemnumber|itemno|code|part)$/.test(lower)) {
+        headerMap.pnCols.push(colIdx);
+      } else if (/^(productkgb|kgbserial|kgb|serialnumber|serialno|serial|sn|s\/n|barcode|imei)$/.test(lower)) {
+        headerMap.serialCols.unshift(colIdx);
+      } else if (/^(productkbb|kbbserial|kbb)$/.test(lower)) {
+        headerMap.serialCols.push(colIdx);
       } else if (/^(boxnumber|boxno|box|carton|pkg)$/.test(lower)) {
-        headerMap.box = colIdx;
+        headerMap.boxCols.push(colIdx);
       } else if (/^(destinationsite|destination|site|branch|location|asp)$/.test(lower)) {
-        headerMap.site = colIdx;
-      } else if (/^(notes|description|desc|remarks)$/.test(lower)) {
-        headerMap.notes = colIdx;
+        headerMap.siteCols.push(colIdx);
+      } else if (/^(notes|description|desc|remarks|name|title)$/.test(lower)) {
+        headerMap.notesCols.push(colIdx);
       }
     });
-
-    if (headerMap.pn === undefined && headers.length > 0) headerMap.pn = 0;
-    if (headerMap.serial === undefined && headers.length > 1) headerMap.serial = 1;
 
     const parsedItems = [];
     const seenSerials = new Set();
@@ -1327,26 +2276,74 @@ export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [
         continue;
       }
 
-      const rawPn = headerMap.pn !== undefined ? String(row[headerMap.pn] || '').trim().toUpperCase() : '';
-      const rawSerial = headerMap.serial !== undefined ? String(row[headerMap.serial] || '').trim().toUpperCase() : '';
-      const rawBox = headerMap.box !== undefined ? parseInt(row[headerMap.box], 10) || 1 : 1;
-      const rawSite = headerMap.site !== undefined ? String(row[headerMap.site] || '').trim() : '';
+      let rawPn = '';
+      for (const col of headerMap.pnCols) {
+        const val = String(row[col] || '').trim();
+        if (val) { rawPn = val; break; }
+      }
+
+      let rawSerial = '';
+      for (const col of headerMap.serialCols) {
+        const val = String(row[col] || '').trim();
+        if (val && !/^(n\/?a|none|null|-)$/i.test(val)) { rawSerial = val; break; }
+      }
+
+      let rawBox = 1;
+      for (const col of headerMap.boxCols) {
+        const parsed = parseInt(row[col], 10);
+        if (!isNaN(parsed) && parsed > 0) { rawBox = parsed; break; }
+      }
+
+      let rawSite = '';
+      for (const col of headerMap.siteCols) {
+        const val = String(row[col] || '').trim();
+        if (val) { rawSite = val; break; }
+      }
+
+      // Per-row intelligent scan if Serial or PN is missing
+      if (!rawSerial || !rawPn) {
+        row.forEach((cell) => {
+          const val = String(cell || '').trim();
+          if (!val) return;
+          if (!rawPn && /(?:ZP|PP|Z)?661-\d{4,6}/i.test(val)) {
+            rawPn = val;
+          } else if (!rawSerial && /^[A-Z0-9]{10,20}$/i.test(val) && !/(?:ZP|PP|Z)?661-\d{4,6}/i.test(val) && !/^\d{4,8}$/.test(val)) {
+            rawSerial = val;
+          }
+        });
+      }
+
+      // Skip Excel summary, total, subtotal, and count footer rows
+      const isSummaryRow = row.some(cell => {
+        const str = String(cell || '').trim();
+        return /^(total|totals|grand total|grandtotal|subtotal|sub-total|count|total count|summary|all totals|report total|end of report|page \d+.*)$/i.test(str);
+      });
+      if (isSummaryRow && (!rawSerial || /^(total|subtotal|count)$/i.test(rawSerial))) {
+        continue;
+      }
+      if (/^(total|totals|grand total|subtotal|count|summary|end of report)$/i.test(rawPn)) {
+        continue;
+      }
 
       if (!rawPn && !rawSerial) continue;
+
+      const cleanPN = rawPn.toUpperCase();
+      const cleanSerial = rawSerial.toUpperCase();
 
       let status = 'VALID';
       let statusMessage = 'In Stock (Ready to Pack)';
       let matchedUnit = null;
 
       // Check against inventoryUnits in DC
-      matchedUnit = inventoryUnits.find(u =>
-        u.serial_number.toUpperCase() === rawSerial &&
-        (!rawPn || u.part_number.toUpperCase() === rawPn)
-      );
+      if (cleanSerial) {
+        matchedUnit = inventoryUnits.find(u =>
+          u.serial_number.toUpperCase() === cleanSerial &&
+          (!cleanPN || u.part_number.toUpperCase() === cleanPN)
+        );
 
-      if (!matchedUnit) {
-        // Fallback search by serial only
-        matchedUnit = inventoryUnits.find(u => u.serial_number.toUpperCase() === rawSerial);
+        if (!matchedUnit) {
+          matchedUnit = inventoryUnits.find(u => u.serial_number.toUpperCase() === cleanSerial);
+        }
       }
 
       if (!matchedUnit) {
@@ -1355,46 +2352,49 @@ export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [
       } else if (matchedUnit.status !== 'in_stock' && matchedUnit.status !== 'allocated') {
         status = 'ALREADY_PACKED';
         statusMessage = `Unit already has status "${matchedUnit.status}"`;
-      } else if (seenSerials.has(rawSerial)) {
+      } else if (cleanSerial && seenSerials.has(cleanSerial)) {
         status = 'DUPLICATE';
         statusMessage = 'Duplicate Serial in file';
       }
 
-      seenSerials.add(rawSerial);
+      if (cleanSerial) {
+        seenSerials.add(cleanSerial);
+      }
 
-      // Match destination site if present in row
-      let rowSiteId = defaultSiteId;
+      // Match destination site if specified
+      let matchedSiteId = defaultSiteId;
+      let matchedSiteName = null;
+
       if (rawSite) {
         const foundSite = sites.find(s =>
-          s.code?.toLowerCase() === rawSite.toLowerCase() ||
-          s.name?.toLowerCase() === rawSite.toLowerCase() ||
-          s.id === rawSite
+          s.code.toLowerCase() === rawSite.toLowerCase() ||
+          s.name.toLowerCase() === rawSite.toLowerCase() ||
+          s.id.toLowerCase() === rawSite.toLowerCase()
         );
-        if (foundSite) rowSiteId = foundSite.id;
+        if (foundSite) {
+          matchedSiteId = foundSite.id;
+          matchedSiteName = foundSite.name;
+        }
       }
 
       parsedItems.push({
-        id: `pack-batch-${i}-${Math.random().toString(36).substr(2, 5)}`,
+        id: `scanout-${i}-${Math.random().toString(36).substr(2, 5)}`,
         rowNumber: i + 1,
-        partNumber: rawPn || matchedUnit?.part_number || 'UNKNOWN',
-        serialNumber: rawSerial,
-        description: matchedUnit?.description || `Part (${rawPn})`,
+        partNumber: cleanPN || matchedUnit?.part_number || '',
+        serialNumber: cleanSerial,
+        description: matchedUnit?.description || cleanPN,
         boxNumber: rawBox,
-        siteId: rowSiteId,
-        siteName: sites.find(s => s.id === rowSiteId)?.name || 'Default Branch',
+        destinationSiteId: matchedSiteId,
+        destinationSiteName: matchedSiteName || rawSite || 'Unassigned',
         status,
         statusMessage,
-        inventoryUnitId: matchedUnit?.id || null
+        matchedUnit
       });
     }
 
     if (parsedItems.length === 0) {
-      return { success: false, error: 'No valid parts found in file.' };
+      return { success: false, error: 'No valid part serial records found in the uploaded file.' };
     }
-
-    const validCount = parsedItems.filter(it => it.status === 'VALID').length;
-    const notFoundCount = parsedItems.filter(it => it.status === 'NOT_FOUND').length;
-    const duplicateCount = parsedItems.filter(it => it.status === 'DUPLICATE' || it.status === 'ALREADY_PACKED').length;
 
     return {
       success: true,
@@ -1402,13 +2402,14 @@ export async function parseScanOutPartsFile(file, inventoryUnits = [], sites = [
       items: parsedItems,
       summary: {
         total: parsedItems.length,
-        valid: validCount,
-        notFound: notFoundCount,
-        duplicates: duplicateCount
+        valid: parsedItems.filter(it => it.status === 'VALID').length,
+        notFound: parsedItems.filter(it => it.status === 'NOT_FOUND').length,
+        duplicates: parsedItems.filter(it => it.status === 'DUPLICATE').length,
+        alreadyPacked: parsedItems.filter(it => it.status === 'ALREADY_PACKED').length
       }
     };
   } catch (err) {
-    console.error('Error parsing pack scan-out file:', err);
+    console.error('Error parsing scan-out file:', err);
     return { success: false, error: `Failed to parse file: ${err.message}` };
   }
 }
@@ -1570,6 +2571,361 @@ export async function parseShipmentManifestFile(file, sites = [], parts = []) {
   } catch (err) {
     console.error('Error parsing shipment manifest file:', err);
     return { success: false, error: `Failed to parse file: ${err.message}` };
+  }
+}
+
+/**
+ * Parse Fixably Stock Transfers Report XLSX or CSV file
+ */
+export async function parseStockTransfersReportFile(file) {
+  try {
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: 'array' });
+    
+    let targetSheetName = workbook.SheetNames[0];
+    for (const name of workbook.SheetNames) {
+      if (/transfer|stock|report/i.test(name)) {
+        targetSheetName = name;
+        break;
+      }
+    }
+
+    const worksheet = workbook.Sheets[targetSheetName];
+    if (!worksheet) {
+      return { success: false, error: 'No readable worksheet found in the uploaded file.' };
+    }
+
+    const rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+    if (!rawRows || rawRows.length < 2) {
+      return { success: false, error: 'The uploaded file is empty or missing data rows.' };
+    }
+
+    // Locate header row
+    let headerIdx = -1;
+    for (let r = 0; r < Math.min(10, rawRows.length); r++) {
+      const rowStr = (rawRows[r] || []).join(' ').toLowerCase();
+      if (
+        (rowStr.includes('from stock') || rowStr.includes('from')) &&
+        (rowStr.includes('to stock') || rowStr.includes('to')) &&
+        (rowStr.includes('product') || rowStr.includes('part') || rowStr.includes('serial'))
+      ) {
+        headerIdx = r;
+        break;
+      }
+    }
+
+    if (headerIdx === -1) {
+      headerIdx = rawRows.length > 1 && rawRows[0].filter(c => String(c).trim()).length <= 2 ? 1 : 0;
+    }
+
+    const headers = (rawRows[headerIdx] || []).map(h => String(h || '').trim());
+    
+    let dateCol = -1, fromCol = -1, toCol = -1, codeCol = -1, nameCol = -1, qtyCol = -1, snCol = -1, imeiCol = -1, valCol = -1;
+    
+    headers.forEach((h, idx) => {
+      const clean = h.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (/receiveddate|transferreceiveddate|transferdate|date|received/.test(clean)) dateCol = idx;
+      else if (/fromstock|fromlocation|fromsite|source|from/.test(clean)) fromCol = idx;
+      else if (/tostock|tolocation|tosite|destination|dest|to/.test(clean)) toCol = idx;
+      else if (/productcode|partnumber|partno|partcode|itemcode|pn|code/.test(clean)) codeCol = idx;
+      else if (/productname|partdescription|description|itemname|product|desc|name/.test(clean)) nameCol = idx;
+      else if (/transferquantity|quantity|qty|count/.test(clean)) qtyCol = idx;
+      else if (/serialnumber|serialno|serial|sn/.test(clean)) snCol = idx;
+      else if (/imeinumber|imei/.test(clean)) imeiCol = idx;
+      else if (/transfervalue|totalvalue|value|price|cost|amount/.test(clean)) valCol = idx;
+    });
+
+    if (dateCol === -1) dateCol = 0;
+    if (fromCol === -1) fromCol = 1;
+    if (toCol === -1) toCol = 2;
+    if (codeCol === -1) codeCol = 3;
+    if (nameCol === -1) nameCol = 4;
+    if (qtyCol === -1) qtyCol = 5;
+    if (snCol === -1) snCol = 6;
+    if (imeiCol === -1) imeiCol = 7;
+    if (valCol === -1) valCol = 8;
+
+    const records = [];
+    const fromSet = new Set();
+    const toSet = new Set();
+    let totalQty = 0;
+    let totalVal = 0;
+
+    for (let r = headerIdx + 1; r < rawRows.length; r++) {
+      const row = rawRows[r] || [];
+      const fromVal = String(row[fromCol] || '').trim();
+      const toVal = String(row[toCol] || '').trim();
+      const codeVal = String(row[codeCol] || '').trim();
+      const nameVal = String(row[nameCol] || '').trim();
+      const snVal = String(row[snCol] || '').trim();
+
+      if (!fromVal && !toVal && !codeVal && !snVal) continue;
+      if (fromVal.toLowerCase().includes('total') || codeVal.toLowerCase().includes('total')) continue;
+
+      let dateRaw = row[dateCol];
+      let formattedDate = '';
+      if (typeof dateRaw === 'number') {
+        const d = new Date((dateRaw - 25569) * 86400 * 1000);
+        formattedDate = !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : String(dateRaw);
+      } else if (dateRaw) {
+        const d = new Date(dateRaw);
+        formattedDate = !isNaN(d.getTime()) ? d.toISOString().split('T')[0] : String(dateRaw).trim();
+      }
+
+      const qty = Number(row[qtyCol]) || 1;
+      const val = Number(row[valCol]) || 0;
+
+      if (fromVal) fromSet.add(fromVal);
+      if (toVal) toSet.add(toVal);
+      totalQty += qty;
+      totalVal += val;
+
+      records.push({
+        id: `trf-${Date.now()}-${r}`,
+        transfer_received_date: formattedDate,
+        from_stock: fromVal || 'DC_MSPI-Owned',
+        to_stock: toVal || 'SERVICE_HUB',
+        product_code: codeVal || 'UNKNOWN',
+        product_name: nameVal || 'Service Part',
+        transfer_quantity: qty,
+        serial_number: snVal,
+        imei_number: String(row[imeiCol] || '').trim(),
+        transfer_value: val
+      });
+    }
+
+    if (records.length === 0) {
+      return { success: false, error: 'No valid transfer records found in file.' };
+    }
+
+    const metadata = {
+      fileName: file.name,
+      uploadedAt: new Date().toISOString(),
+      totalRows: records.length,
+      totalQty,
+      totalVal,
+      uniqueFromCount: fromSet.size,
+      uniqueToCount: toSet.size
+    };
+
+    return {
+      success: true,
+      records,
+      metadata
+    };
+  } catch (err) {
+    console.error('Error parsing Fixably stock transfers file:', err);
+    return { success: false, error: `Failed to parse file: ${err.message}` };
+  }
+}
+
+/**
+ * Exports Stock Transfers records to a beautifully styled Excel workbook using ExcelJS
+ */
+export async function exportStockTransfersToExcel(records, metadata = {}) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Mobile Care Services Phils. Inc.';
+  workbook.lastModifiedBy = 'MDC DC System 2';
+  workbook.created = new Date();
+
+  const worksheet = workbook.addWorksheet('Stock Transfers Report', {
+    pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  const totalQty = records.reduce((sum, r) => sum + (r.transfer_quantity || 0), 0);
+  const totalVal = records.reduce((sum, r) => sum + (r.transfer_value || 0), 0);
+
+  // Title Banner
+  worksheet.mergeCells('A1:I1');
+  const tCell = worksheet.getCell('A1');
+  tCell.value = 'MOBILE CARE SERVICES PHILS. INC. — Fixably Stock Transfers Report';
+  tCell.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+  tCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+  tCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  worksheet.getRow(1).height = 28;
+
+  // KPI Row
+  worksheet.mergeCells('A2:C2');
+  const k1 = worksheet.getCell('A2');
+  k1.value = `TOTAL RECORDS: ${records.length.toLocaleString()} transfers`;
+  k1.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+  k1.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0284C7' } };
+  k1.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  worksheet.mergeCells('D2:F2');
+  const k2 = worksheet.getCell('D2');
+  k2.value = `TOTAL QUANTITY: ${totalQty.toLocaleString()} units`;
+  k2.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF334155' } };
+  k2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF334155' } };
+  k2.alignment = { horizontal: 'center', vertical: 'middle' };
+
+  worksheet.mergeCells('G2:I2');
+  const k3 = worksheet.getCell('G2');
+  k3.value = `TOTAL TRANSFER VALUATION: $${totalVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  k3.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+  k3.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF15803D' } };
+  k3.alignment = { horizontal: 'center', vertical: 'middle' };
+  worksheet.getRow(2).height = 22;
+
+  // Header Row
+  const headers = [
+    'Transfer Received Date',
+    'From Stock',
+    'To Stock',
+    'Product Code',
+    'Product Name',
+    'Transfer Quantity',
+    'Serial Number',
+    'IMEI Number',
+    'Transfer Value ($)'
+  ];
+
+  const headerRow = worksheet.addRow(headers);
+  headerRow.height = 26;
+  headerRow.eachCell((cell) => {
+    cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.border = {
+      top: { style: 'thin', color: { argb: 'FF334155' } },
+      bottom: { style: 'medium', color: { argb: 'FF0284C7' } },
+      left: { style: 'thin', color: { argb: 'FF334155' } },
+      right: { style: 'thin', color: { argb: 'FF334155' } }
+    };
+  });
+
+  records.forEach((r) => {
+    const dRow = worksheet.addRow([
+      r.transfer_received_date || '',
+      r.from_stock || '',
+      r.to_stock || '',
+      r.product_code || '',
+      r.product_name || '',
+      r.transfer_quantity || 1,
+      r.serial_number || '',
+      r.imei_number || '',
+      r.transfer_value || 0
+    ]);
+    dRow.height = 20;
+
+    dRow.eachCell({ includeEmpty: true }, (cell, cNum) => {
+      cell.font = { name: 'Arial', size: 9 };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+        right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+      };
+
+      if (cNum === 1) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 2) {
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF92400E' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF3C7' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 3) {
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF15803D' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 4) {
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 5) {
+        cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      } else if (cNum === 6) {
+        cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF0369A1' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0F2FE' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 7 || cNum === 8) {
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      } else if (cNum === 9) {
+        cell.numFmt = '$#,##0.00';
+        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      }
+    });
+  });
+
+  // Footer Row
+  const footerRow = worksheet.addRow(['TOTAL', '', '', '', `${records.length} Total Records`, totalQty, '', '', totalVal]);
+  footerRow.height = 24;
+  footerRow.eachCell((cell, cNum) => {
+    cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
+    if (cNum === 9) {
+      cell.numFmt = '$#,##0.00';
+      cell.alignment = { horizontal: 'right', vertical: 'middle' };
+    } else {
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+  });
+
+  worksheet.getColumn(1).width = 16;
+  worksheet.getColumn(2).width = 20;
+  worksheet.getColumn(3).width = 20;
+  worksheet.getColumn(4).width = 16;
+  worksheet.getColumn(5).width = 30;
+  worksheet.getColumn(6).width = 12;
+  worksheet.getColumn(7).width = 24;
+  worksheet.getColumn(8).width = 18;
+  worksheet.getColumn(9).width = 16;
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Stock_Transfers_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Downloads a sample template for Fixably Stock Transfers
+ */
+export function downloadSampleStockTransfersTemplate(format = 'xlsx') {
+  const sample = [
+    {
+      'Transfer Received Date': '2026-06-08',
+      'From Stock': 'VER_Repair',
+      'To Stock': 'VER_MSPI-Owned',
+      'Product Code': '661-21996',
+      'Product Name': 'Battery, iPhone 13 Pro',
+      'Transfer Quantity': 1,
+      'Serial Number': 'F8Y5286C0GP13RHCF',
+      'IMEI Number': '',
+      'Transfer Value': 46
+    },
+    {
+      'Transfer Received Date': '2026-06-08',
+      'From Stock': 'GL5_MSPI-Owned',
+      'To Stock': 'NES_MSPI-Owned',
+      'Product Code': '661-05755',
+      'Product Name': 'Battery, iPhone 7 Plus',
+      'Transfer Quantity': 1,
+      'Serial Number': 'F8Y416202VFH86CBA',
+      'IMEI Number': '',
+      'Transfer Value': 69
+    }
+  ];
+
+  const ws = XLSX.utils.json_to_sheet(sample);
+  if (format === 'csv') {
+    const csv = XLSX.utils.sheet_to_csv(ws);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Reports_Stock_Transfers_Template.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } else {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Stock Transfers');
+    XLSX.writeFile(wb, 'Reports_Stock_Transfers_Template.xlsx');
   }
 }
 

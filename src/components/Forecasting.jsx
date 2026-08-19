@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { calculateLinearRegressionForecast } from '../utils/forecastEngine';
+import { exportForecastToExcel } from '../utils/excelParser';
 import SaveRecordModal from './SaveRecordModal';
-import { Download, TrendingUp, UploadCloud, BookmarkPlus } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { Download, TrendingUp, UploadCloud, BookmarkPlus, Printer } from 'lucide-react';
 
 export default function Forecasting() {
   const {
@@ -17,7 +17,7 @@ export default function Forecasting() {
 
   const [showSaveModal, setShowSaveModal] = useState(false);
 
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul'];
 
   // Filter items by category
   const filteredItems = forecastItems.filter(item => {
@@ -29,38 +29,21 @@ export default function Forecasting() {
     return true;
   });
 
-  const exportForecastExcel = () => {
+  const exportForecastExcelHandler = async () => {
     if (filteredItems.length === 0) {
       showToast('No forecast items to export', 'warning');
       return;
     }
+    await exportForecastToExcel(filteredItems, 'August 2026');
+    showToast('Exported August Forecast with styled Excel format', 'success');
+  };
 
-    const data = filteredItems.map(item => {
-      const counts = item.ytd_monthly_counts || [];
-      const computed = calculateLinearRegressionForecast(counts, counts.length + 1);
-      const finalOrder = item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== ''
-        ? parseInt(item.admin_override)
-        : (item.final_forecast || computed);
-
-      const rowObj = {
-        'Part Number': item.part_number,
-        'Description': item.description
-      };
-      months.forEach((m, idx) => {
-        rowObj[m] = counts[idx] || 0;
-      });
-      rowObj['August Forecast'] = computed;
-      rowObj['Admin Override'] = item.admin_override !== null ? item.admin_override : '';
-      rowObj['Final Forecast Order'] = finalOrder;
-
-      return rowObj;
-    });
-
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'August Forecast');
-    XLSX.writeFile(wb, `August_2026_Demand_Forecast.xlsx`);
-    showToast('Exported August Forecast to Excel', 'success');
+  const handlePrint = () => {
+    if (filteredItems.length === 0) {
+      showToast('No forecast items to print', 'warning');
+      return;
+    }
+    window.print();
   };
 
   return (
@@ -88,11 +71,22 @@ export default function Forecasting() {
 
             <button
               className="btn btn-secondary btn-sm"
-              onClick={exportForecastExcel}
+              onClick={exportForecastExcelHandler}
               disabled={filteredItems.length === 0}
+              title="Export styled Excel spreadsheet (.xlsx)"
             >
               <Download size={14} />
               <span>Export Excel</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handlePrint}
+              disabled={filteredItems.length === 0}
+              title="Print Forecast Report"
+            >
+              <Printer size={14} />
+              <span>Print</span>
             </button>
           </div>
         </div>
@@ -158,8 +152,10 @@ export default function Forecasting() {
             </thead>
             <tbody>
               {filteredItems.map(item => {
-                const counts = item.ytd_monthly_counts || [];
-                const computed = calculateLinearRegressionForecast(counts, counts.length + 1);
+                const rawCounts = item.ytd_monthly_counts || [];
+                const counts = rawCounts.slice(0, 7);
+                while (counts.length < 7) counts.push(0);
+                const computed = calculateLinearRegressionForecast(counts, 8);
                 const hasOverride = item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== '';
                 const finalOrder = hasOverride ? parseInt(item.admin_override) : (item.final_forecast || computed);
 

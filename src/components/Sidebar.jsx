@@ -11,6 +11,7 @@ import {
   Split,
   PackageCheck,
   Truck,
+  FileSpreadsheet,
   History,
   Settings,
   ShieldCheck,
@@ -46,6 +47,7 @@ export default function Sidebar() {
     { id: 'allocation', label: 'Allocation Matrix', icon: Split, section: 'Warehouse Operations' },
     { id: 'scan-out', label: 'Pack Scan-Out', icon: PackageCheck, hotkey: 'F2', badge: pendingShipmentsCount, section: 'Warehouse Operations' },
     { id: 'shipments', label: 'Shipments & Packing Lists', icon: Truck, section: 'Distribution' },
+    { id: 'reports', label: 'Stock Transfer Reports', icon: FileSpreadsheet, section: 'Reports & Analytics' },
     { id: 'audit', label: 'Serialized Audit Log', icon: History, section: 'Traceability' },
     { id: 'settings', label: 'Parts & Site Catalog', icon: Settings, section: 'Admin' },
     { id: 'user-access', label: 'User Access Management', icon: Users, section: 'Admin' }
@@ -53,7 +55,7 @@ export default function Sidebar() {
 
   // Filter items by permitted access
   const visibleItems = navItems.filter(item => canAccess(item.id));
-  const sections = ['Core', 'Planning', 'Warehouse Operations', 'Distribution', 'Traceability', 'Admin'];
+  const sections = ['Core', 'Planning', 'Warehouse Operations', 'Distribution', 'Reports & Analytics', 'Traceability', 'Admin'];
 
   return (
     <aside className="sidebar">

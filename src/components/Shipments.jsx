@@ -16,7 +16,8 @@ import {
   RotateCcw,
   AlertTriangle,
   Database,
-  Check
+  Check,
+  Trash2
 } from 'lucide-react';
 import { parseShipmentManifestFile, downloadShipmentManifestTemplate } from '../utils/excelParser';
 
@@ -26,6 +27,7 @@ export default function Shipments() {
     sites,
     parts,
     saveShipment,
+    deleteShipment,
     batchImportShipments,
     clearAllShipmentsData,
     currentUser,
@@ -263,6 +265,19 @@ export default function Shipments() {
                               <span>Confirm</span>
                             </button>
                           )}
+
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={() => {
+                              if (window.confirm(`Delete shipment "${sh.invoice_ref || sh.shipment_number}"? This will return its parts to DC stock.`)) {
+                                deleteShipment(sh.id);
+                              }
+                            }}
+                            title="Delete Shipment"
+                            style={{ background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
                         </div>
                       </td>
                     </tr>

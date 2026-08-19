@@ -19,7 +19,12 @@ import {
   Search,
   Check,
   AlertTriangle,
-  RotateCcw
+  RotateCcw,
+  Database,
+  Eye,
+  History,
+  Calendar,
+  Layers
 } from 'lucide-react';
 import { parseScanOutPartsFile, downloadScanOutTemplate } from '../utils/excelParser';
 
@@ -31,7 +36,9 @@ export default function ScanOutPacking() {
     allocations,
     shipments,
     saveShipment,
+    deleteShipment,
     addScanOutUnit,
+    removeScanOutUnit,
     batchAddScanOutUnits,
     clearShipmentDraftItems,
     currentUser,
@@ -42,6 +49,7 @@ export default function ScanOutPacking() {
   const [selectedSiteId, setSelectedSiteId] = useState(serviceSites[0]?.id || '');
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [boxNumber, setBoxNumber] = useState(1);
+  const [inspectShipmentModal, setInspectShipmentModal] = useState(null);
 
   // Active Shipment Draft with LocalStorage persistence
   const [currentShipment, setCurrentShipment] = useState(() => {
@@ -49,13 +57,23 @@ export default function ScanOutPacking() {
       const saved = localStorage.getItem('mdc_active_pack_draft');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed && parsed.id) return parsed;
+        if (parsed && parsed.id) {
+          return {
+            ...parsed,
+            prepared_by_name: currentUser?.fullName || parsed.prepared_by_name || ''
+          };
+        }
       }
     } catch (e) {
       console.warn('Could not read mdc_active_pack_draft:', e);
     }
     const existing = shipments.find(s => s.site_id === serviceSites[0]?.id && s.status === 'draft');
-    if (existing) return existing;
+    if (existing) {
+      return {
+        ...existing,
+        prepared_by_name: currentUser?.fullName || existing.prepared_by_name || ''
+      };
+    }
     return {
       id: `ship-${Date.now()}`,
       shipment_number: `SHIP-202608-${String(shipments.length + 1).padStart(3, '0')}`,
@@ -67,13 +85,23 @@ export default function ScanOutPacking() {
       tracking_number: '20227258',
       total_boxes: 1,
       status: 'draft',
-      prepared_by_name: currentUser?.fullName || 'Joshua Juvida',
+      prepared_by_name: currentUser?.fullName || '',
       verified_by_name: 'Anjo Alcazar',
       receiving_signature: serviceSites[0]?.code || 'ASP NPM',
       remarks: 'KGB PARTS',
       items: []
     };
   });
+
+  // Automatically synchronize Prepared By with currently logged-in user's full name
+  useEffect(() => {
+    if (currentUser?.fullName) {
+      setCurrentShipment(prev => ({
+        ...prev,
+        prepared_by_name: currentUser.fullName
+      }));
+    }
+  }, [currentUser?.fullName, currentUser?.id]);
 
   // Keep active draft synced to LocalStorage
   useEffect(() => {
@@ -266,16 +294,78 @@ export default function ScanOutPacking() {
     }
   };
 
-  // --- Safe Clear / Unpack Handling ---
+  // --- Safe Individual Item Removal (returns part to DC stock) ---
+  const handleRemoveItem = (serialNumber) => {
+    const res = removeScanOutUnit({
+      shipmentId: currentShipment.id,
+      serialNumber: serialNumber
+    });
+    if (res.success) {
+      setCurrentShipment(prev => ({
+        ...prev,
+        items: (prev.items || []).filter(it => it.serial_number !== serialNumber)
+      }));
+    }
+  };
+
+  // --- Safe Clear / Unpack Handling (Clears ONLY active draft, preserves all database history below) ---
   const handleConfirmClearDraft = () => {
-    clearShipmentDraftItems(currentShipment.id);
-    setCurrentShipment(prev => ({
-      ...prev,
+    // If the active draft has items not yet saved to the database, restore them to DC stock
+    if (currentShipment.items && currentShipment.items.length > 0) {
+      const isAlreadySaved = shipments.some(s => s.id === currentShipment.id && (s.status === 'saved' || s.status === 'shipped'));
+      if (!isAlreadySaved) {
+        clearShipmentDraftItems(currentShipment.id);
+      }
+    }
+
+    try {
+      localStorage.removeItem('mdc_active_pack_draft');
+    } catch (e) {}
+
+    // Generate fresh new draft so the user can start a new packing list for another site
+    const newDraftId = `ship-${Date.now()}`;
+    const newInvoiceRef = `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`;
+
+    setCurrentShipment({
+      id: newDraftId,
+      shipment_number: `SHIP-202608-${String(shipments.length + 1).padStart(3, '0')}`,
+      invoice_ref: newInvoiceRef,
+      site_id: selectedSiteId,
+      week_number: selectedWeek,
+      shipment_date: new Date().toLocaleDateString('en-US'),
+      carrier: 'Lite Express',
+      tracking_number: '20227258',
+      total_boxes: 1,
+      status: 'draft',
+      prepared_by_name: currentUser?.fullName || '',
+      verified_by_name: 'Anjo Alcazar',
+      receiving_signature: selectedSite?.code || 'ASP NPM',
+      remarks: 'KGB PARTS',
       items: []
-    }));
+    });
+
     setIsClearModalOpen(false);
     setScanResult(null);
-    showToast('Cleared packing list draft. All units restored to DC stock.', 'info');
+    showToast('Active packing list cleared. Ready to create a new packing list for another site.', 'info');
+  };
+
+  // --- Save Packing List to Database (Permanently in Database History) ---
+  const handleSaveToDatabase = () => {
+    if (!currentShipment.items || currentShipment.items.length === 0) {
+      showToast('Cannot save an empty packing list. Please add parts first.', 'error');
+      return;
+    }
+    const toSave = {
+      ...currentShipment,
+      id: currentShipment.id || `ship-${Date.now()}`,
+      status: 'saved',
+      total_boxes: boxNumber,
+      site_name: selectedSite.name,
+      site_code: selectedSite.code,
+      updated_at: new Date().toISOString()
+    };
+    saveShipment(toSave);
+    showToast(`Saved Packing List ${toSave.invoice_ref} with ${toSave.items.length} parts permanently to Database History below!`, 'success');
   };
 
   // Finalize Manifest
@@ -287,13 +377,19 @@ export default function ScanOutPacking() {
     const finalized = {
       ...currentShipment,
       status: 'shipped',
-      total_boxes: boxNumber
+      total_boxes: boxNumber,
+      site_name: selectedSite.name,
+      site_code: selectedSite.code,
+      updated_at: new Date().toISOString()
     };
     saveShipment(finalized);
     generatePackingListPDF(finalized, finalized.items, selectedSite);
     
     // Reset draft for next shipment
-    localStorage.removeItem('mdc_active_pack_draft');
+    try {
+      localStorage.removeItem('mdc_active_pack_draft');
+    } catch (e) {}
+
     setCurrentShipment({
       id: `ship-${Date.now()}`,
       shipment_number: `SHIP-202608-${String(shipments.length + 2).padStart(3, '0')}`,
@@ -305,14 +401,14 @@ export default function ScanOutPacking() {
       tracking_number: '20227258',
       total_boxes: 1,
       status: 'draft',
-      prepared_by_name: currentUser?.fullName || 'Joshua Juvida',
+      prepared_by_name: currentUser?.fullName || '',
       verified_by_name: 'Anjo Alcazar',
       receiving_signature: selectedSite?.code || 'ASP NPM',
       remarks: 'KGB PARTS',
       items: []
     });
 
-    showToast(`Manifest ${finalized.invoice_ref} finalized and PDF downloaded!`, 'success');
+    showToast(`Manifest ${finalized.invoice_ref} finalized and saved to Database History!`, 'success');
   };
 
   const filteredManifestItems = useMemo(() => {
@@ -384,7 +480,7 @@ export default function ScanOutPacking() {
         </div>
 
         {/* Site & Batch Selectors */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr 1fr', gap: '14px', marginBottom: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: '14px', marginBottom: '14px' }}>
           <div>
             <label className="scanner-field-label">Destination Service Site</label>
             <select
@@ -437,8 +533,60 @@ export default function ScanOutPacking() {
               type="text"
               className="form-input"
               style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155' }}
-              value={currentShipment.carrier || 'Lite Express'}
+              value={currentShipment.carrier ?? 'Lite Express'}
+              placeholder="e.g. Lite Express"
               onChange={(e) => setCurrentShipment(prev => ({ ...prev, carrier: e.target.value }))}
+            />
+          </div>
+        </div>
+
+        {/* Editable Manifest Details (Invoice Ref, Tracking, Verified By, Prepared By) */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: '14px', marginBottom: '20px' }}>
+          <div>
+            <label className="scanner-field-label">Invoice Reference (Editable)</label>
+            <input
+              type="text"
+              className="form-input font-mono"
+              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '12px' }}
+              value={currentShipment.invoice_ref ?? 'DCMSPIOWNED#20260808G'}
+              placeholder="e.g. DCMSPIOWNED#20260808G"
+              onChange={(e) => setCurrentShipment(prev => ({ ...prev, invoice_ref: e.target.value }))}
+            />
+          </div>
+
+          <div>
+            <label className="scanner-field-label">Tracking Number (Editable)</label>
+            <input
+              type="text"
+              className="form-input font-mono"
+              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '12px' }}
+              value={currentShipment.tracking_number ?? '20227258'}
+              placeholder="e.g. 20227258"
+              onChange={(e) => setCurrentShipment(prev => ({ ...prev, tracking_number: e.target.value }))}
+            />
+          </div>
+
+          <div>
+            <label className="scanner-field-label">Verified By (Editable)</label>
+            <input
+              type="text"
+              className="form-input"
+              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '12px' }}
+              value={currentShipment.verified_by_name ?? 'Anjo Alcazar'}
+              placeholder="e.g. Anjo Alcazar"
+              onChange={(e) => setCurrentShipment(prev => ({ ...prev, verified_by_name: e.target.value }))}
+            />
+          </div>
+
+          <div>
+            <label className="scanner-field-label">Prepared By (Editable)</label>
+            <input
+              type="text"
+              className="form-input"
+              style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155', fontSize: '12px' }}
+              value={currentShipment.prepared_by_name ?? (currentUser?.fullName || '')}
+              placeholder={currentUser?.fullName || "e.g. User Full Name"}
+              onChange={(e) => setCurrentShipment(prev => ({ ...prev, prepared_by_name: e.target.value }))}
             />
           </div>
         </div>
@@ -563,11 +711,23 @@ export default function ScanOutPacking() {
                 className="btn btn-danger btn-sm"
                 onClick={() => setIsClearModalOpen(true)}
                 style={{ height: '34px' }}
+                title="Remove all parts and return them to In-Stock inventory"
               >
                 <RotateCcw size={13} />
                 <span>Clear Draft</span>
               </button>
             )}
+
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleSaveToDatabase}
+              disabled={!currentShipment.items || currentShipment.items.length === 0}
+              style={{ height: '34px', background: '#e0e7ff', color: '#3730a3', borderColor: '#c7d2fe', fontWeight: 600 }}
+              title="Save current packing list and included parts to Database History"
+            >
+              <Database size={14} />
+              <span>Save to Database</span>
+            </button>
 
             <button
               className="btn btn-secondary btn-sm"
@@ -597,34 +757,81 @@ export default function ScanOutPacking() {
           </div>
 
           <div className="packing-company-meta">
-            <div>
-              <h3>MOBILE CARE SERVICES PHILS. INC.</h3>
-              <p>Business and Distribution Center</p>
-              <p>2/L Northeast Square, #47</p>
-              <p>Connecticut St. Northeast Greenhills</p>
-              <p>San Juan City, Metro Manila</p>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+              <img
+                src="/mobilecare_logo.png"
+                alt="Mobile Care Logo"
+                style={{
+                  width: '52px',
+                  height: '52px',
+                  objectFit: 'contain',
+                  borderRadius: '6px',
+                  border: '1px solid #e2e8f0',
+                  padding: '2px',
+                  background: '#ffffff'
+                }}
+              />
+              <div>
+                <h3 style={{ margin: '0 0 3px 0', fontSize: '13px', fontWeight: 800, color: '#0f172a' }}>
+                  MOBILE CARE SERVICES PHILS. INC.
+                </h3>
+                <p style={{ margin: '0 0 2px 0', fontSize: '11.5px', color: '#475569' }}>Business and Distribution Center</p>
+                <p style={{ margin: '0 0 2px 0', fontSize: '11px', color: '#64748b' }}>2/L Northeast Square, #47 Connecticut St. Northeast Greenhills</p>
+                <p style={{ margin: 0, fontSize: '11px', color: '#64748b' }}>San Juan City, Metro Manila</p>
+              </div>
             </div>
 
             <div className="packing-invoice-meta">
-              <div className="packing-invoice-meta-row">
+              <div className="packing-invoice-meta-row" style={{ alignItems: 'center' }}>
                 <strong>INVOICE REF:</strong>
-                <span className="font-mono">{currentShipment.invoice_ref}</span>
+                <input
+                  type="text"
+                  className="packing-inline-input font-mono"
+                  style={{ width: '210px' }}
+                  value={currentShipment.invoice_ref ?? 'DCMSPIOWNED#20260808G'}
+                  placeholder="DCMSPIOWNED#20260808G"
+                  title="Click to edit Invoice Reference"
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, invoice_ref: e.target.value }))}
+                />
               </div>
-              <div className="packing-invoice-meta-row">
+              <div className="packing-invoice-meta-row" style={{ alignItems: 'center' }}>
                 <strong>SHIPMENT DATE:</strong>
-                <span>{currentShipment.shipment_date}</span>
+                <input
+                  type="text"
+                  className="packing-inline-input"
+                  style={{ width: '130px' }}
+                  value={currentShipment.shipment_date ?? new Date().toLocaleDateString('en-US')}
+                  title="Click to edit Shipment Date"
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, shipment_date: e.target.value }))}
+                />
               </div>
-              <div className="packing-invoice-meta-row">
+              <div className="packing-invoice-meta-row" style={{ alignItems: 'center' }}>
                 <strong>BOX/S #:</strong>
                 <span>{boxNumber}</span>
               </div>
-              <div className="packing-invoice-meta-row">
+              <div className="packing-invoice-meta-row" style={{ alignItems: 'center' }}>
                 <strong>CARRIER:</strong>
-                <span>{currentShipment.carrier || 'Lite Express'}</span>
+                <input
+                  type="text"
+                  className="packing-inline-input"
+                  style={{ width: '140px' }}
+                  value={currentShipment.carrier ?? 'Lite Express'}
+                  placeholder="Lite Express"
+                  title="Click to edit Carrier"
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, carrier: e.target.value }))}
+                />
               </div>
-              <div className="packing-invoice-meta-row">
+              <div className="packing-invoice-meta-row" style={{ alignItems: 'center' }}>
                 <strong>TRACKING NUMBER:</strong>
-                <span className="font-mono">{currentShipment.tracking_number}</span>
+                <input
+                  type="text"
+                  className="packing-inline-input font-mono"
+                  style={{ width: '160px' }}
+                  value={currentShipment.tracking_number ?? '20227258'}
+                  placeholder="20227258"
+                  title="Click to edit Tracking Number"
+                  onChange={(e) => setCurrentShipment(prev => ({ ...prev, tracking_number: e.target.value }))}
+                />
               </div>
             </div>
           </div>
@@ -650,14 +857,15 @@ export default function ScanOutPacking() {
                   <th style={{ width: '40px' }}>#</th>
                   <th style={{ width: '130px' }}>PART NUMBER</th>
                   <th>DESCRIPTION</th>
-                  <th style={{ width: '220px' }}>SERIAL NUMBER</th>
+                  <th style={{ width: '200px' }}>SERIAL NUMBER</th>
                   <th style={{ width: '60px' }}>BOX #</th>
+                  <th className="hide-on-print" style={{ width: '50px', textAlign: 'center' }}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredManifestItems.length === 0 ? (
                   <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>
                       {manifestSearch ? `No packed items match "${manifestSearch}"` : 'No items packed yet. Scan parts or import spreadsheet above.'}
                     </td>
                   </tr>
@@ -669,6 +877,27 @@ export default function ScanOutPacking() {
                       <td>{it.description}</td>
                       <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{it.serial_number}</td>
                       <td style={{ textAlign: 'center' }}>{it.box_number || 1}</td>
+                      <td className="hide-on-print" style={{ textAlign: 'center' }}>
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => handleRemoveItem(it.serial_number)}
+                          title="Remove part from packing list & return to DC in-stock inventory"
+                          style={{
+                            background: '#fee2e2',
+                            color: '#dc2626',
+                            border: 'none',
+                            padding: '3px 6px',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -678,9 +907,17 @@ export default function ScanOutPacking() {
 
           {/* Remarks and Totals Box */}
           <div className="packing-summary-bar">
-            <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ fontWeight: 700, fontSize: '12px' }}>Remarks: </span>
-              <span style={{ fontSize: '12px' }}>{currentShipment.remarks || 'KGB PARTS'}</span>
+              <input
+                type="text"
+                className="packing-inline-input packing-inline-input-left"
+                style={{ width: '240px' }}
+                value={currentShipment.remarks ?? 'KGB PARTS'}
+                placeholder="e.g. KGB PARTS"
+                title="Click to edit Remarks"
+                onChange={(e) => setCurrentShipment(prev => ({ ...prev, remarks: e.target.value }))}
+              />
             </div>
 
             <div className="packing-totals-box">
@@ -697,13 +934,29 @@ export default function ScanOutPacking() {
 
           {/* Signatures */}
           <div className="packing-signatures">
-            <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <strong>Prepared and Counted by: </strong>
-              <span>{currentShipment.prepared_by_name || 'Joshua Juvida'}</span>
+              <input
+                type="text"
+                className="packing-inline-input packing-inline-input-left"
+                style={{ width: '160px' }}
+                value={currentShipment.prepared_by_name ?? (currentUser?.fullName || '')}
+                placeholder={currentUser?.fullName || "User Full Name"}
+                title="Click to edit Prepared By"
+                onChange={(e) => setCurrentShipment(prev => ({ ...prev, prepared_by_name: e.target.value }))}
+              />
             </div>
-            <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <strong>Verified by: </strong>
-              <span>{currentShipment.verified_by_name || 'Anjo Alcazar'}</span>
+              <input
+                type="text"
+                className="packing-inline-input packing-inline-input-left"
+                style={{ width: '160px' }}
+                value={currentShipment.verified_by_name ?? 'Anjo Alcazar'}
+                placeholder="Anjo Alcazar"
+                title="Click to edit Verified By"
+                onChange={(e) => setCurrentShipment(prev => ({ ...prev, verified_by_name: e.target.value }))}
+              />
             </div>
             <div>
               <strong>Receiving Branch Signature: </strong>
@@ -712,6 +965,219 @@ export default function ScanOutPacking() {
           </div>
         </div>
       </div>
+
+      {/* Database History: Saved Packing Lists & Historical Records */}
+      <div className="card" style={{ marginTop: '24px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ background: '#e0e7ff', color: '#4338ca', padding: '8px', borderRadius: '8px' }}>
+              <History size={20} />
+            </div>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '16.5px' }}>Saved Packing Lists & Manifest Database History</h3>
+              <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                Persistent record of all finalized and saved packing lists with dates, destinations, and included serialized parts
+              </p>
+            </div>
+          </div>
+          <span className="badge" style={{ background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
+            <Database size={11} style={{ display: 'inline', marginRight: '4px' }} />
+            {shipments.filter(s => s.items && s.items.length > 0).length} Saved Manifests
+          </span>
+        </div>
+
+        {shipments.filter(s => s.items && s.items.length > 0).length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '36px 20px', color: '#94a3b8', border: '1px dashed #e2e8f0', borderRadius: 'var(--radius-md)' }}>
+            <FileText size={32} style={{ margin: '0 auto 8px', color: '#cbd5e1' }} />
+            <p style={{ margin: 0, fontSize: '13.5px' }}>No saved packing lists in database history yet.</p>
+            <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#94a3b8' }}>
+              Pack parts above and click "Save to Database" or "Finalize & Download PDF" to record manifests.
+            </p>
+          </div>
+        ) : (
+          <div className="table-container" style={{ overflowX: 'auto' }}>
+            <table className="data-table" style={{ fontSize: '12.5px' }}>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Invoice Reference</th>
+                  <th>Destination Branch</th>
+                  <th>Total Parts</th>
+                  <th>Carrier & Tracking</th>
+                  <th>Prepared / Verified</th>
+                  <th>Status</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shipments
+                  .filter(s => s.items && s.items.length > 0)
+                  .map(s => {
+                    const destSite = sites.find(st => st.id === s.site_id) || { code: s.site_code || 'HUB', name: s.site_name || 'Branch' };
+                    const formattedDate = s.shipment_date || (s.created_at ? new Date(s.created_at).toLocaleDateString('en-US') : 'N/A');
+                    return (
+                      <tr key={s.id}>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, color: '#334155' }}>
+                            <Calendar size={13} color="var(--primary)" />
+                            <span>{formattedDate}</span>
+                          </div>
+                        </td>
+                        <td className="font-mono" style={{ fontWeight: 700, color: '#0f172a' }}>
+                          {s.invoice_ref || s.shipment_number}
+                        </td>
+                        <td>
+                          <strong>{destSite.code}</strong> <span style={{ color: '#64748b', fontSize: '11.5px' }}>({destSite.name})</span>
+                        </td>
+                        <td>
+                          <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontWeight: 700 }}>
+                            {s.items?.length || 0} units
+                          </span>
+                        </td>
+                        <td style={{ fontSize: '12px' }}>
+                          <div>{s.carrier || 'Lite Express'}</div>
+                          <span className="font-mono" style={{ fontSize: '11px', color: '#64748b' }}>#{s.tracking_number || 'N/A'}</span>
+                        </td>
+                        <td style={{ fontSize: '11.5px', color: '#475569' }}>
+                          <div>By: <strong>{s.prepared_by_name || 'Warehouse Staff'}</strong></div>
+                          <div>Ver: {s.verified_by_name || 'Anjo Alcazar'}</div>
+                        </td>
+                        <td>
+                          <span
+                            className="badge"
+                            style={{
+                              background: s.status === 'shipped' ? '#dcfce7' : s.status === 'delivered' ? '#e0e7ff' : '#fef3c7',
+                              color: s.status === 'shipped' ? '#15803d' : s.status === 'delivered' ? '#4338ca' : '#b45309',
+                              textTransform: 'uppercase',
+                              fontSize: '10.5px'
+                            }}
+                          >
+                            {s.status}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <div style={{ display: 'inline-flex', gap: '6px' }}>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setInspectShipmentModal(s)}
+                              title="View all serialized parts included in this manifest"
+                              style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            >
+                              <Eye size={12} />
+                              <span>Inspect Parts</span>
+                            </button>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => generatePackingListPDF(s, s.items || [], destSite)}
+                              title="Download PDF"
+                              style={{ padding: '4px 8px', fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                            >
+                              <Download size={12} />
+                              <span>PDF</span>
+                            </button>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => printPackingListDirect(s, s.items || [], destSite)}
+                              title="Print Manifest"
+                              style={{ padding: '4px 8px', fontSize: '11.5px' }}
+                            >
+                              <Printer size={12} />
+                            </button>
+                            <button
+                              className="btn btn-danger btn-sm"
+                              onClick={() => {
+                                if (window.confirm(`Delete saved manifest "${s.invoice_ref || s.shipment_number}"? This will return its parts to DC stock.`)) {
+                                  deleteShipment(s.id);
+                                }
+                              }}
+                              title="Permanently Delete Manifest from Database"
+                              style={{ padding: '4px 8px', fontSize: '11.5px', background: '#fee2e2', color: '#dc2626', borderColor: '#fca5a5' }}
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* --- Modal: Inspect Parts in Saved Manifest Record --- */}
+      {inspectShipmentModal && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setInspectShipmentModal(null); }}>
+          <div className="modal-content" style={{ maxWidth: '780px' }}>
+            <div className="modal-header" style={{ background: '#0f172a' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: '#38bdf8', padding: '6px', borderRadius: '6px', color: '#0f172a' }}>
+                  <PackageCheck size={20} />
+                </div>
+                <div>
+                  <h3 style={{ color: '#fff', fontSize: '16.5px', margin: 0 }}>
+                    Manifest {inspectShipmentModal.invoice_ref || inspectShipmentModal.shipment_number}
+                  </h3>
+                  <p style={{ color: '#94a3b8', fontSize: '12px', margin: '2px 0 0 0' }}>
+                    Destination: {inspectShipmentModal.site_name || inspectShipmentModal.site_code || 'Service Hub'} • Date: {inspectShipmentModal.shipment_date || 'N/A'} • Total: {inspectShipmentModal.items?.length || 0} parts
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setInspectShipmentModal(null)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="modal-body" style={{ maxHeight: '420px', overflowY: 'auto' }}>
+              <table className="data-table" style={{ fontSize: '12px' }}>
+                <thead>
+                  <tr>
+                    <th style={{ width: '40px' }}>#</th>
+                    <th>Part Number</th>
+                    <th>Description</th>
+                    <th>Serial Number</th>
+                    <th style={{ width: '60px', textAlign: 'center' }}>Box #</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(inspectShipmentModal.items || []).map((it, idx) => (
+                    <tr key={idx}>
+                      <td style={{ textAlign: 'center', color: '#64748b' }}>{idx + 1}</td>
+                      <td className="font-mono" style={{ fontWeight: 700 }}>{it.part_number}</td>
+                      <td>{it.description}</td>
+                      <td className="font-mono" style={{ color: '#0369a1', fontWeight: 600 }}>{it.serial_number}</td>
+                      <td style={{ textAlign: 'center' }}>{it.box_number || 1}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+              <div style={{ fontSize: '12px', color: '#64748b' }}>
+                Carrier: <strong>{inspectShipmentModal.carrier || 'Lite Express'}</strong> • Tracking: <span className="font-mono">#{inspectShipmentModal.tracking_number || 'N/A'}</span>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    const dest = sites.find(s => s.id === inspectShipmentModal.site_id) || {};
+                    generatePackingListPDF(inspectShipmentModal, inspectShipmentModal.items || [], dest);
+                  }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <Download size={14} />
+                  <span>Download PDF</span>
+                </button>
+                <button className="btn btn-primary" onClick={() => setInspectShipmentModal(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* --- Safety Confirmation Modal: Clear Packing Draft --- */}
       {isClearModalOpen && (

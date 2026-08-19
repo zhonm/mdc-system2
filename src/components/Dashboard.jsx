@@ -128,6 +128,14 @@ export default function Dashboard() {
               <PackageCheck size={18} />
               <span>Packing List Scan (F2)</span>
             </button>
+            <button
+              className="btn btn-secondary btn-lg"
+              onClick={() => setActiveTab('reports')}
+              style={{ background: '#0369a1', color: '#fff', borderColor: '#0284c7' }}
+            >
+              <FileSpreadsheet size={18} />
+              <span>Stock Transfer Reports</span>
+            </button>
           </div>
         </div>
       </div>

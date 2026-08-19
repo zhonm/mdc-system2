@@ -36,6 +36,7 @@ export default function Header() {
     allocation: 'Master Allocation Matrix & Weekly Batches',
     'scan-out': 'Pack Scan-Out & Packing List Generator',
     shipments: 'Shipment Manifests & Proof of Delivery',
+    reports: 'Fixably Stock Transfer Reports & Analytics',
     audit: 'Serialized Lifecycle & Traceability Audit',
     settings: 'Parts Catalog & Site Configuration',
     'user-access': 'User Access & Permissions Management'
