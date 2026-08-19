@@ -1,5 +1,6 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
+import mobileCareLogo from '../assets/mobilecare_logo.png';
 import {
   LayoutDashboard,
   UploadCloud,
@@ -57,9 +58,15 @@ export default function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <div className="sidebar-logo-icon">M</div>
+        <div className="sidebar-logo-img-wrapper">
+          <img
+            src={mobileCareLogo}
+            alt="Mobile Care"
+            className="sidebar-logo-img"
+          />
+        </div>
         <div className="sidebar-brand">
-          <h2>MDC System 2</h2>
+          <h2>DC System</h2>
           <p>Mobile Care Services Phils.</p>
         </div>
       </div>

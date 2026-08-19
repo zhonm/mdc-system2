@@ -3,7 +3,7 @@ import { calculateLinearRegressionForecast, calculateRecommendedOrder } from './
 import { calculateProportionalAllocation, calculateWeeklySplit } from './allocationEngine.js';
 
 /**
- * Universal Parser for MDC System 2.
+ * Universal Parser for DC System.
  * Intelligently parses:
  * 1. Google Sheets / Excel Multi-Tab Workbooks (Forecasting + Master Allocation)
  * 2. Pre-Aggregated Demand Forecasting Sheets (Jan..Jul..Aug side-by-side Battery & Display)

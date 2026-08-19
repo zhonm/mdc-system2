@@ -31,7 +31,7 @@ export default function SettingsCatalog() {
   };
 
   const copySqlSchema = () => {
-    const sqlContent = `-- MDC System 2 Supabase Schema with Authentication & RBAC
+    const sqlContent = `-- DC System Supabase Schema with Authentication & RBAC
 -- (Refer to src/supabase/schema.sql for the complete script)`;
     navigator.clipboard.writeText(sqlContent);
     setCopied(true);

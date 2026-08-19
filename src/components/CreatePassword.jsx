@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { ShieldCheck, Lock, CheckCircle2, XCircle, Eye, EyeOff, ArrowRight, RefreshCw, Sparkles } from 'lucide-react';
+import mobileCareLogo from '../assets/mobilecare_logo.png';
 
 export default function CreatePassword() {
   const { pendingFirstTimeUser, setPendingFirstTimeUser, createFirstTimePassword, showToast } = useApp();
@@ -45,157 +46,139 @@ export default function CreatePassword() {
   };
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'radial-gradient(ellipse at center, #0f172a 0%, #020617 100%)',
-        padding: '24px'
-      }}
-    >
-      <div style={{ width: '100%', maxWidth: '480px' }}>
-        <div className="scanner-hero" style={{ padding: '36px 32px' }}>
-          {/* Header */}
-          <div style={{ textAlign: 'center', marginBottom: '24px' }}>
-            <div
-              style={{
-                width: '50px',
-                height: '50px',
-                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                borderRadius: 'var(--radius-md)',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#fff',
-                marginBottom: '12px',
-                boxShadow: '0 0 20px rgba(16, 185, 129, 0.4)'
-              }}
-            >
-              <Sparkles size={24} />
-            </div>
+    <div className="auth-page">
+      <div className="auth-ambient-glow" />
 
-            <div className="scanner-status-indicator" style={{ display: 'inline-flex', marginBottom: '8px', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }}>
-              <div className="pulse-dot" style={{ background: '#34d399' }} />
-              <span>First-Time Account Activation</span>
-            </div>
-
-            <h2 style={{ color: '#fff', fontSize: '20px', fontWeight: 600 }}>
-              Create Your Password
-            </h2>
-            <p style={{ color: '#94a3b8', fontSize: '13px', marginTop: '2px' }}>
-              Welcome, <strong style={{ color: '#f1f5f9' }}>{pendingFirstTimeUser.fullName}</strong> ({pendingFirstTimeUser.email})
-            </p>
+      <div className="auth-card" style={{ maxWidth: '480px' }}>
+        {/* Header */}
+        <div className="auth-header">
+          <div className="auth-logo-badge">
+            <img
+              src={mobileCareLogo}
+              alt="Mobile Care Logo"
+              className="auth-logo-img"
+            />
           </div>
 
-          <form onSubmit={handleSubmit}>
-            {/* New Password */}
-            <div className="form-group" style={{ marginBottom: '16px' }}>
-              <label className="scanner-field-label">New Password</label>
-              <div style={{ position: 'relative' }}>
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  className="scanner-input"
-                  placeholder="Create a secure password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  autoFocus
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  style={{
-                    position: 'absolute',
-                    right: '14px',
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    background: 'transparent',
-                    border: 'none',
-                    color: '#94a3b8',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-            </div>
+          <div className="auth-badge" style={{ background: 'rgba(16, 185, 129, 0.12)', borderColor: 'rgba(16, 185, 129, 0.28)', color: '#34d399' }}>
+            <div className="pulse-dot" style={{ background: '#34d399' }} />
+            <span>Account Activation • DC System</span>
+          </div>
 
-            {/* Confirm Password */}
-            <div className="form-group" style={{ marginBottom: '20px' }}>
-              <label className="scanner-field-label">Confirm Password</label>
+          <h1 className="auth-title">
+            Create Your Password
+          </h1>
+          <p className="auth-subtitle">
+            Welcome, <strong style={{ color: '#f1f5f9' }}>{pendingFirstTimeUser.fullName}</strong> ({pendingFirstTimeUser.email})
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          {/* New Password */}
+          <div className="auth-form-group">
+            <label className="auth-label">New Password</label>
+            <div className="auth-input-wrapper">
+              <Lock size={18} className="auth-input-icon" />
               <input
                 type={showPassword ? 'text' : 'password'}
-                className="scanner-input"
+                className="auth-input"
+                style={{ paddingRight: '48px' }}
+                placeholder="Create a secure password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoFocus
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                title={showPassword ? 'Hide password' : 'Show password'}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="auth-eye-btn"
+                style={{
+                  color: showPassword ? '#38bdf8' : '#94a3b8'
+                }}
+              >
+                {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+          </div>
+
+          {/* Confirm Password */}
+          <div className="auth-form-group">
+            <label className="auth-label">Confirm Password</label>
+            <div className="auth-input-wrapper">
+              <Lock size={18} className="auth-input-icon" />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                className="auth-input"
                 placeholder="Re-enter your password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
               />
             </div>
+          </div>
 
-            {/* Security Checklist */}
-            <div style={{ background: '#1e293b', borderRadius: 'var(--radius-sm)', padding: '14px', marginBottom: '24px', border: '1px solid #334155' }}>
-              <div style={{ fontSize: '11.5px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginBottom: '8px' }}>
-                Security Requirements:
+          {/* Security Checklist */}
+          <div style={{ background: 'rgba(30, 41, 59, 0.5)', borderRadius: '12px', padding: '14px 16px', marginBottom: '22px', border: '1px solid #334155' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '10px' }}>
+              Security Requirements
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: hasMinLength ? '#34d399' : '#94a3b8' }}>
+                {hasMinLength ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}
+                <span>8+ characters</span>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: hasMinLength ? '#34d399' : '#94a3b8' }}>
-                  {hasMinLength ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                  <span>8+ characters</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: hasLetter ? '#34d399' : '#94a3b8' }}>
-                  {hasLetter ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                  <span>At least 1 letter</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: hasNumber ? '#34d399' : '#94a3b8' }}>
-                  {hasNumber ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                  <span>At least 1 number</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: isMatch ? '#34d399' : '#94a3b8' }}>
-                  {isMatch ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                  <span>Passwords match</span>
-                </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: hasLetter ? '#34d399' : '#94a3b8' }}>
+                {hasLetter ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}
+                <span>At least 1 letter</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: hasNumber ? '#34d399' : '#94a3b8' }}>
+                {hasNumber ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}
+                <span>At least 1 number</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: isMatch ? '#34d399' : '#94a3b8' }}>
+                {isMatch ? <CheckCircle2 size={14} color="#34d399" /> : <XCircle size={14} color="#64748b" />}
+                <span>Passwords match</span>
               </div>
             </div>
+          </div>
 
-            {errorMessage && (
-              <div className="scanner-feedback-box scanner-feedback-error" style={{ marginBottom: '20px' }}>
-                <span>{errorMessage}</span>
-              </div>
+          {errorMessage && (
+            <div className="scanner-feedback-box scanner-feedback-error" style={{ marginBottom: '20px', padding: '10px 14px' }}>
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            className="auth-btn-primary"
+            disabled={!isFormValid || isLoading}
+          >
+            {isLoading ? (
+              <>
+                <RefreshCw className="spin" size={17} />
+                <span>Activating Account...</span>
+              </>
+            ) : (
+              <>
+                <span>Save Password & Access DC System</span>
+                <ArrowRight size={17} />
+              </>
             )}
+          </button>
 
+          <div style={{ textAlign: 'center', marginTop: '18px' }}>
             <button
-              type="submit"
-              className="btn btn-primary btn-lg"
-              style={{ width: '100%', height: '50px', background: isFormValid ? 'var(--primary)' : '#475569' }}
-              disabled={!isFormValid || isLoading}
+              type="button"
+              onClick={() => setPendingFirstTimeUser(null)}
+              style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '12.5px', cursor: 'pointer' }}
             >
-              {isLoading ? (
-                <>
-                  <RefreshCw className="animate-spin" size={17} />
-                  <span>Activating Account...</span>
-                </>
-              ) : (
-                <>
-                  <span>Save Password & Log In</span>
-                  <ArrowRight size={17} />
-                </>
-              )}
+              ← Back to Login
             </button>
-
-            <div style={{ textAlign: 'center', marginTop: '16px' }}>
-              <button
-                type="button"
-                onClick={() => setPendingFirstTimeUser(null)}
-                style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '12.5px', cursor: 'pointer' }}
-              >
-                Back to Login
-              </button>
-            </div>
-          </form>
-        </div>
+          </div>
+        </form>
       </div>
     </div>
   );

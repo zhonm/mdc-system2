@@ -1,6 +1,6 @@
-# MDC System 2: Distribution Center Parts Allocation & Reporting System
+# DC System: Distribution Center Parts Allocation & Reporting System
 
-**MDC System 2** is the central logistics, demand forecasting, and inventory allocation platform for **Mobile Care Services Philippines Inc. (MDC)**. It manages serialized Apple service parts across the central Main Distribution Center (DC) and 26 Authorized Service Provider (ASP) branches nationwide.
+**DC System** is the central logistics, demand forecasting, and inventory allocation platform for **Mobile Care Services Philippines Inc. (MDC)**. It manages serialized Apple service parts across the central Main Distribution Center (DC) and 26 Authorized Service Provider (ASP) branches nationwide.
 
 ---
 

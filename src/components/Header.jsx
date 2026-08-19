@@ -46,7 +46,7 @@ export default function Header() {
       <div className="header-left">
         <div>
           <h1 style={{ fontSize: '18px', margin: 0, lineHeight: 1.2 }}>
-            {tabTitles[activeTab] || 'MDC System 2'}
+            {tabTitles[activeTab] || 'DC System'}
           </h1>
           <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             Period: August 2026 • Mobile Care Services Phils. Inc.

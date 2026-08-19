@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw } from 'lucide-react';
+import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck } from 'lucide-react';
+import { Turnstile } from '@marsidev/react-turnstile';
+import mobileCareLogo from '../assets/mobilecare_logo.png';
+
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_CLOUDFLARE_TURNSTILE_SITE_KEY || '0x4AAAAAAEVDHe8fyHEMI2fu';
 
 export default function Login() {
   const { verifyLoginEmail, signInWithPassword, setPendingFirstTimeUser, showToast } = useApp();
@@ -13,6 +17,7 @@ export default function Login() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [showForgotModal, setShowForgotModal] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState('');
 
   // Handle Email Verification Step
   const handleEmailSubmit = async (e) => {
@@ -56,6 +61,11 @@ export default function Login() {
       return;
     }
 
+    if (!turnstileToken) {
+      setErrorMessage('Please verify that you are not a robot.');
+      return;
+    }
+
     setErrorMessage('');
     setIsLoading(true);
 
@@ -72,193 +82,226 @@ export default function Login() {
   };
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'radial-gradient(ellipse at center, #0f172a 0%, #020617 100%)',
-        padding: '24px'
-      }}
-    >
-      <div style={{ width: '100%', maxWidth: '460px' }}>
-        {/* Auth Hero Card */}
-        <div className="scanner-hero" style={{ padding: '36px 32px', marginBottom: '20px' }}>
-          {/* Header */}
-          <div style={{ textAlign: 'center', marginBottom: '28px' }}>
-            <div
-              style={{
-                width: '54px',
-                height: '54px',
-                background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
-                borderRadius: 'var(--radius-md)',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#fff',
-                fontWeight: 700,
-                fontSize: '22px',
-                marginBottom: '12px',
-                boxShadow: '0 0 20px rgba(2, 132, 199, 0.4)'
-              }}
-            >
-              M
-            </div>
-            <div className="scanner-status-indicator" style={{ display: 'inline-flex', marginBottom: '8px' }}>
-              <div className="pulse-dot" />
-              <span>MDC System 2 • Secure Portal</span>
-            </div>
-            <h2 style={{ color: '#fff', fontSize: '20px', fontWeight: 600 }}>
-              MOBILE CARE SERVICES PHILS. INC.
-            </h2>
-            <p style={{ color: '#94a3b8', fontSize: '13px', marginTop: '2px' }}>
-              Distribution Center Parts Allocation & Reporting
-            </p>
+    <div className="auth-page">
+      {/* Background ambient lighting */}
+      <div className="auth-ambient-glow" />
+
+      <div className="auth-card">
+        {/* Header Branding */}
+        <div className="auth-header">
+          <div className="auth-logo-badge">
+            <img
+              src={mobileCareLogo}
+              alt="Mobile Care Services"
+              className="auth-logo-img"
+            />
           </div>
 
-          {/* Form */}
-          {step === 'email' ? (
-            <form onSubmit={handleEmailSubmit}>
-              <div className="form-group" style={{ marginBottom: '20px' }}>
-                <label className="scanner-field-label">Company Email</label>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    type="email"
-                    className="scanner-input"
-                    placeholder="e.g. name@mobilecare.com.ph"
-                    value={emailInput}
-                    onChange={(e) => {
-                      setEmailInput(e.target.value);
-                      if (errorMessage) setErrorMessage('');
-                    }}
-                    autoFocus
-                    required
-                  />
+          <div className="auth-badge">
+            <div className="pulse-dot" style={{ background: '#38bdf8' }} />
+            <span>DC System • Secure Access</span>
+          </div>
+
+          <h1 className="auth-title">
+            MOBILE CARE SERVICES PHILS. INC.
+          </h1>
+          <p className="auth-subtitle">
+            Distribution Center Logistics & Allocation Platform
+          </p>
+        </div>
+
+        {/* Form Section */}
+        {step === 'email' ? (
+          <form onSubmit={handleEmailSubmit}>
+            <div className="auth-form-group">
+              <label className="auth-label">Company Email</label>
+              <div className="auth-input-wrapper">
+                <Mail size={18} className="auth-input-icon" />
+                <input
+                  type="email"
+                  className="auth-input"
+                  placeholder="e.g. name@mobilecare.com.ph"
+                  value={emailInput}
+                  onChange={(e) => {
+                    setEmailInput(e.target.value);
+                    if (errorMessage) setErrorMessage('');
+                  }}
+                  autoFocus
+                  required
+                />
+              </div>
+            </div>
+
+            {errorMessage && (
+              <div
+                className="scanner-feedback-box scanner-feedback-error"
+                style={{ marginBottom: '20px', padding: '10px 14px' }}
+              >
+                <AlertCircle size={17} color="#ef4444" style={{ flexShrink: 0 }} />
+                <span style={{ fontSize: '13px' }}>{errorMessage}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="auth-btn-primary"
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <>
+                  <RefreshCw className="spin" size={17} />
+                  <span>Checking Provisioning...</span>
+                </>
+              ) : (
+                <>
+                  <span>Continue with Email</span>
+                  <ArrowRight size={17} />
+                </>
+              )}
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={handlePasswordSubmit}>
+            {/* User identification chip */}
+            <div className="auth-user-chip">
+              <div className="auth-user-info">
+                <div className="auth-user-avatar">
+                  {verifiedUser?.fullName ? verifiedUser.fullName.charAt(0).toUpperCase() : 'U'}
+                </div>
+                <div>
+                  <div style={{ fontWeight: 600, color: '#f1f5f9', fontSize: '13px', lineHeight: 1.2 }}>
+                    {verifiedUser?.fullName || 'Authorized Staff'}
+                  </div>
+                  <div style={{ color: '#94a3b8', fontSize: '12px', lineHeight: 1.2 }}>
+                    {verifiedUser?.email}
+                  </div>
                 </div>
               </div>
-
-              {errorMessage && (
-                <div
-                  className="scanner-feedback-box scanner-feedback-error"
-                  style={{ marginBottom: '20px', padding: '10px 14px' }}
-                >
-                  <AlertCircle size={17} color="#ef4444" style={{ flexShrink: 0 }} />
-                  <span style={{ fontSize: '13px' }}>{errorMessage}</span>
-                </div>
-              )}
-
               <button
-                type="submit"
-                className="btn btn-primary btn-lg"
-                style={{ width: '100%', height: '50px' }}
-                disabled={isLoading}
+                type="button"
+                onClick={() => {
+                  setStep('email');
+                  setPasswordInput('');
+                  setErrorMessage('');
+                  setTurnstileToken('');
+                }}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#38bdf8',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  fontWeight: 500,
+                  padding: '4px 8px'
+                }}
               >
-                {isLoading ? (
-                  <>
-                    <RefreshCw className="animate-spin" size={17} />
-                    <span>Checking Provisioning...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>Continue with Email</span>
-                    <ArrowRight size={17} />
-                  </>
-                )}
+                Switch
               </button>
-            </form>
-          ) : (
-            <form onSubmit={handlePasswordSubmit}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                <div style={{ fontSize: '13px', color: '#cbd5e1' }}>
-                  Signing in as: <strong style={{ color: '#38bdf8' }}>{verifiedUser?.email}</strong>
-                </div>
+            </div>
+
+            <div className="auth-form-group">
+              <div className="auth-label">
+                <span>Password</span>
                 <button
                   type="button"
-                  onClick={() => {
-                    setStep('email');
-                    setPasswordInput('');
-                    setErrorMessage('');
+                  onClick={() => setShowForgotModal(true)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#38bdf8',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    textTransform: 'none',
+                    fontWeight: 500,
+                    letterSpacing: 'normal'
                   }}
-                  style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline' }}
                 >
-                  Change
+                  Forgot Password?
                 </button>
               </div>
-
-              <div className="form-group" style={{ marginBottom: '20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <label className="scanner-field-label" style={{ marginBottom: 0 }}>Password</label>
-                  <button
-                    type="button"
-                    onClick={() => setShowForgotModal(true)}
-                    style={{ background: 'transparent', border: 'none', color: '#38bdf8', fontSize: '12px', cursor: 'pointer' }}
-                  >
-                    Forgot Password?
-                  </button>
-                </div>
-                <div style={{ position: 'relative', marginTop: '6px' }}>
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    className="scanner-input"
-                    placeholder="Enter your password"
-                    value={passwordInput}
-                    onChange={(e) => {
-                      setPasswordInput(e.target.value);
-                      if (errorMessage) setErrorMessage('');
-                    }}
-                    autoFocus
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    style={{
-                      position: 'absolute',
-                      right: '14px',
-                      top: '50%',
-                      transform: 'translateY(-50%)',
-                      background: 'transparent',
-                      border: 'none',
-                      color: '#94a3b8',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-              </div>
-
-              {errorMessage && (
-                <div
-                  className="scanner-feedback-box scanner-feedback-error"
-                  style={{ marginBottom: '20px', padding: '10px 14px' }}
+              <div className="auth-input-wrapper">
+                <Lock size={18} className="auth-input-icon" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  className="auth-input"
+                  style={{ paddingRight: '48px' }}
+                  placeholder="Enter your password"
+                  value={passwordInput}
+                  onChange={(e) => {
+                    setPasswordInput(e.target.value);
+                    if (errorMessage) setErrorMessage('');
+                  }}
+                  autoFocus
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="auth-eye-btn"
+                  style={{
+                    color: showPassword ? '#38bdf8' : '#94a3b8'
+                  }}
                 >
-                  <AlertCircle size={17} color="#ef4444" style={{ flexShrink: 0 }} />
-                  <span style={{ fontSize: '13px' }}>{errorMessage}</span>
-                </div>
-              )}
+                  {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+            </div>
 
-              <button
-                type="submit"
-                className="btn btn-primary btn-lg"
-                style={{ width: '100%', height: '50px' }}
-                disabled={isLoading}
+            {/* Cloudflare Turnstile Verification Widget */}
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '18px' }}>
+              <Turnstile
+                siteKey={TURNSTILE_SITE_KEY}
+                options={{
+                  theme: 'dark',
+                  size: 'normal'
+                }}
+                onSuccess={(token) => {
+                  setTurnstileToken(token);
+                  if (errorMessage) setErrorMessage('');
+                }}
+                onExpire={() => setTurnstileToken('')}
+                onError={() => {
+                  setErrorMessage('Verification check failed. Please refresh or retry.');
+                }}
+              />
+            </div>
+
+            {errorMessage && (
+              <div
+                className="scanner-feedback-box scanner-feedback-error"
+                style={{ marginBottom: '20px', padding: '10px 14px' }}
               >
-                {isLoading ? (
-                  <>
-                    <RefreshCw className="animate-spin" size={17} />
-                    <span>Signing in...</span>
-                  </>
-                ) : (
-                  <>
-                    <Lock size={17} />
-                    <span>Log In to MDC System 2</span>
-                  </>
-                )}
-              </button>
-            </form>
-          )}
+                <AlertCircle size={17} color="#ef4444" style={{ flexShrink: 0 }} />
+                <span style={{ fontSize: '13px' }}>{errorMessage}</span>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="auth-btn-primary"
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <>
+                  <RefreshCw className="spin" size={17} />
+                  <span>Authenticating...</span>
+                </>
+              ) : (
+                <>
+                  <Lock size={16} />
+                  <span>Sign In to DC System</span>
+                </>
+              )}
+            </button>
+          </form>
+        )}
+
+        {/* Security Footer Notice */}
+        <div className="auth-footer-notice">
+          <ShieldCheck size={14} color="#64748b" />
+          <span>Authorized DC Employees Only • Encrypted Session</span>
         </div>
       </div>
 
@@ -269,6 +312,7 @@ export default function Login() {
             position: 'fixed',
             inset: 0,
             background: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(8px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -276,10 +320,10 @@ export default function Login() {
             padding: '20px'
           }}
         >
-          <div className="card" style={{ maxWidth: '420px', width: '100%', background: '#0f172a', color: '#fff', borderColor: '#334155' }}>
+          <div className="card" style={{ maxWidth: '420px', width: '100%', background: '#0f172a', color: '#fff', borderColor: '#334155', borderRadius: '16px' }}>
             <h3 style={{ color: '#fff', marginBottom: '8px' }}>Reset Password</h3>
-            <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '20px' }}>
-              For security, password resets for authorized service staff are administered by your IT Superadmin or via standard Supabase recovery tokens.
+            <p style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '20px', lineHeight: 1.5 }}>
+              For security, password resets for authorized service staff are administered by your IT Superadmin.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button className="btn btn-secondary" onClick={() => setShowForgotModal(false)}>

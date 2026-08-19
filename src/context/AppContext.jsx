@@ -472,7 +472,7 @@ export function AppProvider({ children }) {
     setCurrentUser(updatedUser);
     const initialPage = updatedUser.permittedPages?.[0] || 'dashboard';
     setActiveTab(initialPage);
-    showToast(`Password successfully configured! Welcome to MDC System 2, ${updatedUser.fullName}.`, 'success');
+    showToast(`Password successfully configured! Welcome to DC System, ${updatedUser.fullName}.`, 'success');
     return { success: true, user: updatedUser };
   };
 
