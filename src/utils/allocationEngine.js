@@ -4,10 +4,11 @@
  */
 
 /**
- * Calculates fair proportional allocation across sites using largest-remainder method
- * Guarantees that sum(allocations) exactly equals totalReceivedQty with no rounding drift.
+ * Calculates fair proportional allocation across sites using Excel Cumulative Rounding Formula:
+ * =IF(ForecastQty<=0, 0, MAX(0, ROUND(ForecastQty * SUM($H$share:Col$share), 0) - ROUND(ForecastQty * (SUM($H$share:Col$share) - Col$share), 0)))
+ * Guarantees that sum(allocations) exactly equals totalReceivedQty with zero inflation and no rounding drift.
  *
- * @param {number} totalReceivedQty - Total available stock to allocate
+ * @param {number} totalReceivedQty - Total monthly forecasted quantity / available stock to allocate
  * @param {Array<{siteId: string, historicalDemand: number, orderedQty?: number}>} siteDemands
  * @returns {Array<{siteId: string, sharePct: number, allocatedQty: number}>}
  */
@@ -20,59 +21,55 @@ export function calculateProportionalAllocation(totalReceivedQty, siteDemands = 
     }));
   }
 
-  const totalDemand = siteDemands.reduce((sum, s) => sum + (s.historicalDemand || 0), 0);
-
-  if (totalDemand === 0) {
-    // If no demand history, distribute evenly
-    const base = Math.floor(totalReceivedQty / siteDemands.length);
-    let rem = totalReceivedQty % siteDemands.length;
-    return siteDemands.map((s, idx) => ({
+  const targetQty = Math.max(0, Math.round(totalReceivedQty));
+  if (targetQty === 0) {
+    return siteDemands.map(s => ({
       siteId: s.siteId,
-      sharePct: 1 / siteDemands.length,
-      allocatedQty: base + (idx < rem ? 1 : 0)
+      sharePct: 0,
+      allocatedQty: 0
     }));
   }
 
-  // 1. Calculate precise decimal quotas
-  const quotaItems = siteDemands.map((s, index) => {
+  const totalDemand = siteDemands.reduce((sum, s) => sum + (s.historicalDemand || 0), 0);
+
+  // If no demand history across any site, distribute evenly
+  if (totalDemand === 0) {
+    let cumulativeDemandShare = 0;
+    const uniformShare = 1 / siteDemands.length;
+    return siteDemands.map((s, idx) => {
+      const prevCum = cumulativeDemandShare;
+      cumulativeDemandShare = (idx + 1) * uniformShare;
+      const allocatedQty = Math.max(
+        0,
+        Math.round(targetQty * cumulativeDemandShare) - Math.round(targetQty * prevCum)
+      );
+      return {
+        siteId: s.siteId,
+        sharePct: uniformShare,
+        allocatedQty
+      };
+    });
+  }
+
+  // Exact Excel Cumulative Rounding Formula
+  let cumulativeShare = 0;
+  return siteDemands.map(s => {
     const demand = s.historicalDemand || 0;
     const sharePct = demand / totalDemand;
-    const exactQuota = totalReceivedQty * sharePct;
-    const baseQty = Math.floor(exactQuota);
-    const remainder = exactQuota - baseQty;
+    const prevCumulativeShare = cumulativeShare;
+    cumulativeShare += sharePct;
+
+    const allocatedQty = Math.max(
+      0,
+      Math.round(targetQty * cumulativeShare) - Math.round(targetQty * prevCumulativeShare)
+    );
+
     return {
       siteId: s.siteId,
       sharePct,
-      exactQuota,
-      baseQty,
-      remainder,
-      index
+      allocatedQty
     };
   });
-
-  // 2. Sum of base integer quantities
-  const allocatedSum = quotaItems.reduce((acc, q) => acc + q.baseQty, 0);
-  let surplusToDistribute = totalReceivedQty - allocatedSum;
-
-  // 3. Sort by largest remainder descending
-  const sorted = [...quotaItems].sort((a, b) => {
-    if (b.remainder !== a.remainder) {
-      return b.remainder - a.remainder;
-    }
-    return a.index - b.index;
-  });
-
-  // 4. Distribute 1 extra unit to top surplus recipients
-  const extraAllocations = new Map();
-  for (let i = 0; i < surplusToDistribute && i < sorted.length; i++) {
-    extraAllocations.set(sorted[i].siteId, 1);
-  }
-
-  return quotaItems.map(q => ({
-    siteId: q.siteId,
-    sharePct: q.sharePct,
-    allocatedQty: q.baseQty + (extraAllocations.get(q.siteId) || 0)
-  }));
 }
 
 /**

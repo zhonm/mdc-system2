@@ -13,7 +13,6 @@ export default function SettingsCatalog() {
   const [newDesc, setNewDesc] = useState('');
   const [newCatId, setNewCatId] = useState(categories[0]?.id || 'cat-battery');
   const [newStockPrice, setNewStockPrice] = useState(150);
-  const [newExchangePrice, setNewExchangePrice] = useState(120);
 
   const handleAddPart = (e) => {
     e.preventDefault();
@@ -25,8 +24,7 @@ export default function SettingsCatalog() {
       part_number: newPn.trim(),
       description: newDesc.trim(),
       category_id: newCatId,
-      stocking_price: parseFloat(newStockPrice) || 0,
-      exchange_price: parseFloat(newExchangePrice) || 0
+      stocking_price: parseFloat(newStockPrice) || 0
     });
     setNewPn('');
     setNewDesc('');
@@ -90,7 +88,7 @@ export default function SettingsCatalog() {
           {/* Add Part Form */}
           <div className="card" style={{ marginBottom: '20px' }}>
             <h3 style={{ marginBottom: '12px' }}>Add Part to Catalog</h3>
-            <form onSubmit={handleAddPart} style={{ display: 'grid', gridTemplateColumns: '1.2fr 2fr 1.2fr 1fr 1fr auto', gap: '12px', alignItems: 'flex-end' }}>
+            <form onSubmit={handleAddPart} style={{ display: 'grid', gridTemplateColumns: '1.2fr 2fr 1.2fr 1fr auto', gap: '12px', alignItems: 'flex-end' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label className="form-label">Part Number (P/N)</label>
                 <input
@@ -136,16 +134,6 @@ export default function SettingsCatalog() {
                 />
               </div>
 
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Exchange ($)</label>
-                <input
-                  type="number"
-                  className="form-input"
-                  value={newExchangePrice}
-                  onChange={(e) => setNewExchangePrice(e.target.value)}
-                />
-              </div>
-
               <button type="submit" className="btn btn-primary" style={{ height: '42px' }}>
                 <Plus size={15} />
                 <span>Add</span>
@@ -164,8 +152,7 @@ export default function SettingsCatalog() {
                     <th>Description</th>
                     <th>Model</th>
                     <th>Category</th>
-                    <th style={{ textAlign: 'right' }}>Stock Price</th>
-                    <th style={{ textAlign: 'right' }}>Exchange Price</th>
+                    <th style={{ textAlign: 'right' }}>Stock Price ($)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -181,7 +168,6 @@ export default function SettingsCatalog() {
                           <span className="badge badge-neutral">{cat?.name || 'Part'}</span>
                         </td>
                         <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${p.stocking_price || 0}</td>
-                        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>${p.exchange_price || 0}</td>
                       </tr>
                     );
                   })}

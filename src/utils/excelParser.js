@@ -27,12 +27,11 @@ export function isForecastingMatrixSheet(rows) {
 }
 
 export function isAllocationMatrixSheet(rows) {
-  for (let r = 0; r < Math.min(6, rows.length); r++) {
+  for (let r = 0; r < Math.min(8, rows.length); r++) {
     const str = (rows[r] || []).join(' ').toUpperCase();
-    if (
-      (str.includes('TOTAL ALLOC') || str.includes('TOTAL') || str.includes('ALLOCATION')) &&
-      (str.includes('BHS') || str.includes('GB3') || str.includes('PPM') || str.includes('GL5') || str.includes('CEB') || str.includes('MEG') || str.includes('APP ') || str.includes('ASP '))
-    ) {
+    const hasBranchCodes = str.includes('BHS') || str.includes('GB3') || str.includes('PPM') || str.includes('GL5') || str.includes('CEB') || str.includes('MEG') || str.includes('APP ') || str.includes('ASP ') || str.includes('BONIFACIO') || str.includes('GREENBELT');
+    const hasMatrixHeaders = str.includes('TOTAL') || str.includes('ALLOCATION') || str.includes('COMMODITY') || str.includes('FORECAST') || str.includes('P/N') || str.includes('PART NUMBER') || str.includes('PART DESCRIPTION');
+    if (hasBranchCodes && hasMatrixHeaders) {
       return true;
     }
   }
@@ -64,7 +63,7 @@ export function isTargetIPhonePart(desc, pn, filterScope = 'IPHONE_13_PLUS_BATTE
   const combined = `${d} ${p}`;
 
   // 1. Exclude non-iPhone hardware & non-component consumables
-  if (/ipad|macbook|mac\s|imac|watch|airpod|vision|pencil|top case|enclosure|housing|logic board|flex|speaker|receiver|screw|adhesive|tray|sensor|camera lens|sim|battery tape|screw kit/i.test(d)) {
+  if (/ipad|macbook|mac\s|imac|watch|airpod|vision|pencil|top case|enclosure|housing|logic board|flex|speaker|receiver|screw|adhesive|\btray\b|sensor|camera lens|\bsim\s*tray\b|\bsim\s*eject|battery tape|screw kit/i.test(d)) {
     return false;
   }
 
@@ -72,20 +71,22 @@ export function isTargetIPhonePart(desc, pn, filterScope = 'IPHONE_13_PLUS_BATTE
   const isIphone = /iphone/i.test(combined);
   if (!isIphone) return false;
 
-  // 3. Must be Battery or Display
+  // 3. Must be Battery, Display, Camera, or Back Glass
   const isBattery = /battery|batt\b/i.test(d);
   const isDisplay = /display|screen|oled|lcd/i.test(d);
-  if (!isBattery && !isDisplay) {
+  const isCamera = /camera/i.test(d);
+  const isBackGlass = /back\s*glass|rear\s*system|mid\s*system/i.test(d);
+  if (!isBattery && !isDisplay && !isCamera && !isBackGlass) {
     return false;
   }
 
-  // 4. Must be iPhone 13 or newer (13, 14, 15, 16, 17, etc.)
+  // 4. Exclude older iPhones (< iPhone 13)
   if (/\biphone\s*(4|4s|5|5s|5c|6|6s|6\s*plus|6s\s*plus|7|7\s*plus|8|8\s*plus|x|xr|xs|xs\s*max|11|11\s*pro|11\s*pro\s*max|12|12\s*mini|12\s*pro|12\s*pro\s*max)\b/i.test(d)) {
     return false;
   }
 
-  const is13OrNewer = /\biphone\s*(13|14|15|16|17|18|19|20|se\s*\(3rd)\b/i.test(d) ||
-                      /iphone\s*(13|14|15|16|17)/i.test(combined);
+  const is13OrNewer = /\biphone\s*(13|14|15|16|17|18|19|20|air|se\s*\(3rd)\b/i.test(d) ||
+                      /iphone\s*(13|14|15|16|17|air)/i.test(combined);
 
   if (!is13OrNewer) {
     return false;
@@ -116,28 +117,53 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
         const sheetNames = wb.SheetNames;
 
         // Check for Multi-Tab Comprehensive Workbook (.xlsx)
-        const forecastSheetName = sheetNames.find(s => /battery.*display.*forecasting|forecasting|forecast/i.test(s));
-        const allocSheetName = sheetNames.find(s => /master.*list|batt.*disp|master.*alloc|allocation/i.test(s));
+        const allocSheetName = !isCsv ? sheetNames.find(s =>
+          (/master.*alloc|allocation|_alloc/i.test(s) || /july.*alloc|august.*alloc/i.test(s)) && !/forecasting|forecast/i.test(s)
+        ) : null;
 
-        if (!isCsv && forecastSheetName && allocSheetName) {
-          const wsForecast = wb.Sheets[forecastSheetName];
-          const rawForecastRows = XLSX.utils.sheet_to_json(wsForecast, { header: 1, defval: '' });
-          const parsedForecast = parseForecastingSheet(rawForecastRows, filterScope);
+        const forecastSheetName = !isCsv ? sheetNames.find(s =>
+          /forecasting|forecast/i.test(s) && !/allocation|_alloc/i.test(s)
+        ) : null;
 
+        const rawSheetName = !isCsv ? sheetNames.find(s =>
+          (/master.*list|iphones|iphone|repairs|raw/i.test(s)) && s !== allocSheetName && s !== forecastSheetName
+        ) : null;
+
+        // A. Multi-Tab Workbook with Explicit Master Allocation Sheet
+        if (allocSheetName) {
           const wsAlloc = wb.Sheets[allocSheetName];
           const rawAllocRows = XLSX.utils.sheet_to_json(wsAlloc, { header: 1, defval: '' });
           const parsedAlloc = parseAllocationSheet(rawAllocRows, currentSites, filterScope);
 
+          let parsedForecast = { forecastItems: [], parts: [] };
+          if (forecastSheetName) {
+            const wsForecast = wb.Sheets[forecastSheetName];
+            const rawForecastRows = XLSX.utils.sheet_to_json(wsForecast, { header: 1, defval: '' });
+            parsedForecast = parseForecastingSheet(rawForecastRows, filterScope);
+          } else {
+            // Build fallback forecast items from allocation data
+            parsedForecast.forecastItems = parsedAlloc.allocations.map(a => ({
+              part_id: a.part_id,
+              part_number: a.part_number,
+              description: a.description,
+              category_id: a.category_id,
+              computed_forecast: a.forecasted_qty || a.total_allocated_qty,
+              final_forecast: a.forecasted_qty || a.total_allocated_qty,
+              safety_stock_units: 0,
+              recommended_order: a.forecasted_qty || a.total_allocated_qty
+            }));
+          }
+
           resolve({
             success: true,
             type: 'WORKBOOK_BUNDLE',
-            sheetName: `${forecastSheetName} + ${allocSheetName}`,
+            sheetName: forecastSheetName ? `${forecastSheetName} + ${allocSheetName}` : allocSheetName,
             summary: {
               forecastPartsCount: parsedForecast.forecastItems.length,
               allocPartsCount: parsedAlloc.allocations.length,
               sitesCount: parsedAlloc.sites.length,
-              totalForecastedUnits: parsedForecast.forecastItems.reduce((acc, f) => acc + (f.final_forecast || f.computed_forecast || 0), 0),
-              description: `Extracted complete operational system data: ${parsedForecast.forecastItems.length} demand forecasts from "${forecastSheetName}" and ${parsedAlloc.allocations.length} master allocations across ${parsedAlloc.sites.length} service sites from "${allocSheetName}".`
+              totalForecastedUnits: parsedAlloc.allocations.reduce((acc, a) => acc + (a.total_allocated_qty || 0), 0),
+              description: `Extracted complete operational system data: ${parsedForecast.forecastItems.length} demand forecasts and ${parsedAlloc.allocations.length} master allocations across ${parsedAlloc.sites.length} service sites from "${allocSheetName}".`
             },
             payload: {
               forecastItems: parsedForecast.forecastItems,
@@ -149,28 +175,106 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           return;
         }
 
-        // Single Sheet or CSV Inspection
-        const firstWs = wb.Sheets[sheetNames[0]];
-        const rawRows = XLSX.utils.sheet_to_json(firstWs, { header: 1, defval: '' });
+        // B. Multi-Tab Forecasting Workbook (Demand Forecast Matrix + Raw Usage / Masterlist)
+        if (forecastSheetName) {
+          const wsForecast = wb.Sheets[forecastSheetName];
+          const rawForecastRows = XLSX.utils.sheet_to_json(wsForecast, { header: 1, defval: '' });
+          const parsedForecast = parseForecastingSheet(rawForecastRows, filterScope);
 
-        // A. Is it a Pre-Aggregated Forecasting Sheet?
-        if (isForecastingMatrixSheet(rawRows)) {
-          const parsedForecast = parseForecastingSheet(rawRows, filterScope);
+          const finalSites = currentSites.filter(s => !s.is_dc);
+
+          // Extract branch site distribution from raw repair logs sheet if available
+          const partSiteRepairs = new Map();
+          if (rawSheetName) {
+            const wsRaw = wb.Sheets[rawSheetName];
+            const rawRows = XLSX.utils.sheet_to_json(wsRaw, { header: 1, defval: '' });
+            let hIdx = 0;
+            for (let i = 0; i < Math.min(6, rawRows.length); i++) {
+              const s = (rawRows[i] || []).join(' ').toLowerCase();
+              if (s.includes('location') || s.includes('site') || s.includes('product code') || s.includes('part')) {
+                hIdx = i; break;
+              }
+            }
+            const headers = (rawRows[hIdx] || []).map(h => String(h).toLowerCase());
+            const siteCol = headers.findIndex(h => /location|site|branch/i.test(h));
+            const pnCol = headers.findIndex(h => /product\s*code|part\s*number|p\/n|code/i.test(h));
+
+            if (siteCol >= 0 && pnCol >= 0) {
+              for (let r = hIdx + 1; r < rawRows.length; r++) {
+                const row = rawRows[r];
+                if (!row) continue;
+                const pn = String(row[pnCol] || '').trim();
+                const loc = String(row[siteCol] || '').trim();
+                if (!pn || !loc) continue;
+                if (!partSiteRepairs.has(pn)) partSiteRepairs.set(pn, {});
+                const counts = partSiteRepairs.get(pn);
+                counts[loc] = (counts[loc] || 0) + 1;
+              }
+            }
+          }
+
+          // Generate fair proportional branch allocations using Excel Cumulative Rounding Formula
+          const generatedAllocations = parsedForecast.forecastItems.map((f, idx) => {
+            const pn = f.part_number;
+            const targetQty = f.final_forecast || f.computed_forecast || 0;
+            const siteCounts = partSiteRepairs.get(pn) || {};
+
+            const siteDemands = finalSites.map(s => {
+              let count = siteCounts[s.name] || 0;
+              if (count === 0) {
+                const matchKey = Object.keys(siteCounts).find(k => k.includes(s.code) || s.code.includes(k) || s.name.includes(k) || k.includes(s.name));
+                if (matchKey) count = siteCounts[matchKey];
+              }
+              return { siteId: s.id, historicalDemand: count };
+            });
+
+            const allocatedResults = calculateProportionalAllocation(targetQty, siteDemands);
+            const siteQuantities = {};
+            allocatedResults.forEach(res => { siteQuantities[res.siteId] = res.allocatedQty; });
+            const split = calculateWeeklySplit(targetQty, idx);
+
+            return {
+              part_id: f.part_id || `part-${pn}`,
+              part_number: pn,
+              description: f.description,
+              category_id: f.category_id,
+              forecasted_qty: targetQty,
+              stocking_price: f.category_id === 'cat-display' ? 280 : 99,
+              total_allocated_qty: targetQty,
+              w1_qty: split.week1,
+              w2_qty: split.week2,
+              w3_qty: split.week3,
+              w4_qty: split.week4,
+              site_quantities: siteQuantities
+            };
+          });
+
           resolve({
             success: true,
-            type: 'FORECAST',
-            sheetName: sheetNames[0],
+            type: 'WORKBOOK_BUNDLE',
+            sheetName: rawSheetName ? `${forecastSheetName} + ${rawSheetName}` : forecastSheetName,
             summary: {
-              partsCount: parsedForecast.forecastItems.length,
-              totalForecastedUnits: parsedForecast.forecastItems.reduce((acc, f) => acc + (f.final_forecast || f.computed_forecast || 0), 0),
-              description: `Extracted demand matrix and linear forecasts for ${parsedForecast.forecastItems.length} genuine parts from "${sheetNames[0]}".`
+              forecastPartsCount: parsedForecast.forecastItems.length,
+              allocPartsCount: generatedAllocations.length,
+              sitesCount: finalSites.length,
+              totalForecastedUnits: generatedAllocations.reduce((acc, a) => acc + (a.total_allocated_qty || 0), 0),
+              description: `Extracted ${parsedForecast.forecastItems.length} demand forecasts from "${forecastSheetName}" and generated fair branch allocations across ${finalSites.length} service sites.`
             },
-            payload: parsedForecast
+            payload: {
+              forecastItems: parsedForecast.forecastItems,
+              allocations: generatedAllocations,
+              sites: currentSites,
+              parts: parsedForecast.parts
+            }
           });
           return;
         }
 
-        // B. Is it a Pre-Aggregated Master Allocation Sheet?
+        // C. Single Sheet or CSV Inspection
+        const firstWs = wb.Sheets[sheetNames[0]];
+        const rawRows = XLSX.utils.sheet_to_json(firstWs, { header: 1, defval: '' });
+
+        // 1. Is it a Pre-Aggregated Allocation Matrix Sheet?
         if (isAllocationMatrixSheet(rawRows)) {
           const parsedAlloc = parseAllocationSheet(rawRows, currentSites, filterScope);
           resolve({
@@ -187,7 +291,52 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           return;
         }
 
-        // C. Default: Process as Raw Repair Logs
+        // 2. Is it a Pre-Aggregated Forecasting Sheet?
+        if (isForecastingMatrixSheet(rawRows)) {
+          const parsedForecast = parseForecastingSheet(rawRows, filterScope);
+          const finalSites = currentSites.filter(s => !s.is_dc);
+          const generatedAllocations = parsedForecast.forecastItems.map((f, idx) => {
+            const targetQty = f.final_forecast || f.computed_forecast || 0;
+            const siteDemands = finalSites.map(s => ({ siteId: s.id, historicalDemand: 1 }));
+            const allocatedResults = calculateProportionalAllocation(targetQty, siteDemands);
+            const siteQuantities = {};
+            allocatedResults.forEach(res => { siteQuantities[res.siteId] = res.allocatedQty; });
+            const split = calculateWeeklySplit(targetQty, idx);
+
+            return {
+              part_id: f.part_id,
+              part_number: f.part_number,
+              description: f.description,
+              category_id: f.category_id,
+              forecasted_qty: targetQty,
+              stocking_price: f.category_id === 'cat-display' ? 280 : 99,
+              total_allocated_qty: targetQty,
+              w1_qty: split.week1,
+              w2_qty: split.week2,
+              w3_qty: split.week3,
+              w4_qty: split.week4,
+              site_quantities: siteQuantities
+            };
+          });
+
+          resolve({
+            success: true,
+            type: 'FORECAST',
+            sheetName: sheetNames[0],
+            summary: {
+              partsCount: parsedForecast.forecastItems.length,
+              totalForecastedUnits: parsedForecast.forecastItems.reduce((acc, f) => acc + (f.final_forecast || f.computed_forecast || 0), 0),
+              description: `Extracted demand matrix and linear forecasts for ${parsedForecast.forecastItems.length} genuine parts from "${sheetNames[0]}".`
+            },
+            payload: {
+              ...parsedForecast,
+              allocations: generatedAllocations
+            }
+          });
+          return;
+        }
+
+        // 3. Default: Process as Raw Repair Logs
         const usageResult = processRawUsageSheet(rawRows, currentSites, currentParts, filterScope, selectedMonth, file.name);
         resolve({
           success: true,
@@ -273,7 +422,6 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
           category_id: 'cat-battery',
           iphone_model: descBat.replace(/^(Battery),?\s*/i, ''),
           stocking_price: 150,
-          exchange_price: 120,
           is_active: true
         });
       }
@@ -309,7 +457,6 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
           category_id: 'cat-display',
           iphone_model: descDisp.replace(/^(Display),?\s*/i, ''),
           stocking_price: 280,
-          exchange_price: 230,
           is_active: true
         });
       }
@@ -364,7 +511,6 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
         category_id: catId,
         iphone_model: desc.replace(/^(Battery|Display),?\s*/i, ''),
         stocking_price: isDisplay ? 280 : 150,
-        exchange_price: isDisplay ? 230 : 120,
         is_active: true
       });
     }
@@ -381,16 +527,18 @@ export function parseAllocationSheet(rawRows, existingSites = [], filterScope = 
   let headerRowIndex = 0;
   for (let r = 0; r < Math.min(8, rawRows.length); r++) {
     const rowStr = (rawRows[r] || []).join(' ').toUpperCase();
-    if (rowStr.includes('BHS') || rowStr.includes('GB3') || rowStr.includes('PPM') || rowStr.includes('TOTAL ALLOC')) {
+    if (rowStr.includes('BHS') || rowStr.includes('GB3') || rowStr.includes('PPM') || rowStr.includes('P/N') || rowStr.includes('PART DESCRIPTION')) {
       headerRowIndex = r;
       break;
     }
   }
 
   const headerRow = (rawRows[headerRowIndex] || []).map(h => String(h).trim());
-  const pnCol = headerRow.findIndex(h => /part\s*number|p\/n|part\s*#|code/i.test(h)) >= 0 ? headerRow.findIndex(h => /part\s*number|p\/n|part\s*#|code/i.test(h)) : 0;
-  const descCol = headerRow.findIndex(h => /description|desc|part\s*name/i.test(h)) >= 0 ? headerRow.findIndex(h => /description|desc|part\s*name/i.test(h)) : 1;
-  const totalAllocCol = headerRow.findIndex(h => /total\s*alloc|total/i.test(h));
+  const pnCol = headerRow.findIndex(h => /part\s*number|p\/n|part\s*#|code/i.test(h)) >= 0 ? headerRow.findIndex(h => /part\s*number|p\/n|part\s*#|code/i.test(h)) : 5;
+  const descCol = headerRow.findIndex(h => /description|desc|part\s*name/i.test(h)) >= 0 ? headerRow.findIndex(h => /description|desc|part\s*name/i.test(h)) : 6;
+  const forecastQtyCol = headerRow.findIndex(h => /forecasted\s*qty|forecast/i.test(h));
+  const stockPriceCol = headerRow.findIndex(h => /stocking\s*price|price/i.test(h));
+  const totalAllocCol = headerRow.findIndex(h => /total\s*parts|total\s*alloc|total/i.test(h));
 
   // Map site columns
   const siteCodeMap = {}; // colIdx -> siteObj
@@ -398,7 +546,7 @@ export function parseAllocationSheet(rawRows, existingSites = [], filterScope = 
 
   headerRow.forEach((h, colIdx) => {
     const cleanH = h.toUpperCase().replace(/^MOBILECARE\s*-\s*/i, '').trim();
-    if (!cleanH || /part|desc|model|price|category|total|w1|w2|w3|w4|remarks/i.test(cleanH)) {
+    if (!cleanH || /commodity|forecast|price|exchange|part|p\/n|desc|total|w1|w2|w3|w4|remark/i.test(cleanH)) {
       return;
     }
 
@@ -421,16 +569,30 @@ export function parseAllocationSheet(rawRows, existingSites = [], filterScope = 
 
   const allocations = [];
   const parts = [];
+  const seenPns = new Set();
 
   for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
     const row = rawRows[r];
     if (!row || row.length === 0) continue;
 
+    const rowStr = row.join(' ').toLowerCase();
+    // Stop at bottom summary/footer rows and percentage share tables
+    if (
+      rowStr.includes('total parts per site') ||
+      rowStr.includes('total cost breakdown') ||
+      rowStr.includes('repair parts usage report') ||
+      rowStr.includes('stockprice')
+    ) {
+      break;
+    }
+
     const pn = String(row[pnCol] || '').trim();
     const desc = String(row[descCol] || '').trim();
     if (!pn && !desc) continue;
+    if (seenPns.has(pn)) continue; // Avoid duplicate parts from lower share tables
 
     if (!isTargetIPhonePart(desc, pn, filterScope)) continue;
+    seenPns.add(pn);
 
     const siteQuantities = {};
     let rowSum = 0;
@@ -441,16 +603,28 @@ export function parseAllocationSheet(rawRows, existingSites = [], filterScope = 
       rowSum += qty;
     });
 
-    const totalAlloc = totalAllocCol >= 0 ? (parseInt(row[totalAllocCol]) || rowSum) : rowSum;
-    const split = calculateWeeklySplit(totalAlloc, r);
-
+    const totalAlloc = totalAllocCol >= 0 && row[totalAllocCol] !== '' ? (parseInt(row[totalAllocCol]) || 0) : rowSum;
+    const forecastQty = forecastQtyCol >= 0 && row[forecastQtyCol] !== '' ? (parseInt(row[forecastQtyCol]) || 0) : totalAlloc;
+    const parsedPrice = stockPriceCol >= 0 && row[stockPriceCol] !== '' ? (parseFloat(String(row[stockPriceCol]).replace(/[^0-9.]/g, '')) || 0) : 0;
+    
     const isDisplay = desc.toLowerCase().includes('display');
-    const catId = isDisplay ? 'cat-display' : 'cat-battery';
+    const isBattery = desc.toLowerCase().includes('battery') || desc.toLowerCase().includes('batt');
+    const isCamera = desc.toLowerCase().includes('camera');
+    const isBackGlass = desc.toLowerCase().includes('back glass') || desc.toLowerCase().includes('rear system');
+
+    const catId = isDisplay ? 'cat-display' : isBattery ? 'cat-battery' : isCamera ? 'cat-camera' : isBackGlass ? 'cat-backglass' : 'cat-other';
+    const fallbackPrice = isDisplay ? 280 : isBattery ? 99 : 150;
+    const finalStockPrice = parsedPrice > 0 ? parsedPrice : fallbackPrice;
+
+    const split = calculateWeeklySplit(totalAlloc, r);
 
     allocations.push({
       part_id: `part-${pn}`,
       part_number: pn,
       description: desc,
+      category_id: catId,
+      forecasted_qty: forecastQty,
+      stocking_price: finalStockPrice,
       total_allocated_qty: totalAlloc,
       w1_qty: split.week1,
       w2_qty: split.week2,
@@ -464,9 +638,8 @@ export function parseAllocationSheet(rawRows, existingSites = [], filterScope = 
       part_number: pn,
       description: desc,
       category_id: catId,
-      iphone_model: desc.replace(/^(Battery|Display),?\s*/i, ''),
-      stocking_price: isDisplay ? 280 : 150,
-      exchange_price: isDisplay ? 230 : 120,
+      iphone_model: desc.replace(/^(Battery|Display|Camera|Back Glass),?\s*/i, ''),
+      stocking_price: finalStockPrice,
       is_active: true
     });
   }
@@ -520,14 +693,32 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
 
   const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-  let defaultFileMonthIdx = 7; // August default
-  if (selectedMonth !== 'auto') {
-    defaultFileMonthIdx = Math.max(0, Math.min(11, parseInt(selectedMonth) || 0));
+  function parseExcelOrDateString(val) {
+    if (val === null || val === undefined || val === '') return null;
+    if (typeof val === 'number' && val > 20000 && val < 60000) {
+      return new Date((val - 25569) * 86400 * 1000);
+    }
+    const strVal = String(val).trim();
+    const numVal = parseFloat(strVal);
+    if (!isNaN(numVal) && numVal > 20000 && numVal < 60000) {
+      return new Date((numVal - 25569) * 86400 * 1000);
+    }
+    const parsed = new Date(strVal);
+    if (!isNaN(parsed.getTime()) && parsed.getFullYear() >= 2020) {
+      return parsed;
+    }
+    return null;
+  }
+
+  let targetMonthIdx = 7; // August default
+  if (selectedMonth !== 'auto' && selectedMonth !== undefined && selectedMonth !== '') {
+    targetMonthIdx = Math.max(0, Math.min(11, parseInt(selectedMonth) || 7));
   } else if (fileName) {
     const fLower = fileName.toLowerCase();
     const foundIdx = MONTH_NAMES.findIndex(m => fLower.includes(m.toLowerCase()));
-    if (foundIdx >= 0) defaultFileMonthIdx = foundIdx;
+    if (foundIdx >= 0) targetMonthIdx = foundIdx;
   }
+  let defaultFileMonthIdx = targetMonthIdx;
 
   for (let r = headerIndex + 1; r < rawRows.length; r++) {
     const row = rawRows[r];
@@ -536,7 +727,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     const rawPn = String(row[colIndices.partNumber] || '').trim();
     const rawDesc = String(row[colIndices.partDesc] || '').trim();
     const rawSite = String(row[colIndices.site] || '').trim();
-    const rawMonth = String(row[colIndices.month] || '').trim();
+    const rawMonth = row[colIndices.month];
     const rawQty = Math.max(1, parseInt(row[colIndices.qty]) || 1);
     const repairNo = colIndices.repairId >= 0 ? String(row[colIndices.repairId] || '').trim() : `RPR-${r}`;
     const serial = colIndices.serial >= 0 ? String(row[colIndices.serial] || '').trim() : '';
@@ -581,12 +772,13 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     }
 
     let monthIdx = defaultFileMonthIdx;
-    if (selectedMonth === 'auto' && rawMonth) {
-      const parsedDate = new Date(rawMonth);
-      if (!isNaN(parsedDate.getTime()) && parsedDate.getFullYear() >= 2020) {
+    if (rawMonth !== undefined && rawMonth !== null && rawMonth !== '') {
+      const parsedDate = parseExcelOrDateString(rawMonth);
+      if (parsedDate) {
         monthIdx = parsedDate.getMonth();
       } else {
-        const mMatch = MONTH_NAMES.findIndex(m => rawMonth.toLowerCase().includes(m.toLowerCase()));
+        const rawMonthStr = String(rawMonth).toLowerCase();
+        const mMatch = MONTH_NAMES.findIndex(m => rawMonthStr.includes(m.toLowerCase()));
         if (mMatch >= 0) monthIdx = mMatch;
       }
     }
@@ -599,7 +791,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
 
     records.push({
       repairNumber: repairNo,
-      closedDate: rawMonth || MONTH_NAMES[monthIdx],
+      closedDate: typeof rawMonth === 'number' ? MONTH_NAMES[monthIdx] : (String(rawMonth) || MONTH_NAMES[monthIdx]),
       monthIndex: monthIdx,
       partNumber: cleanPn,
       description: cleanDesc,
@@ -641,8 +833,11 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
   const nonDcBranchSites = finalSitesList.filter(s => !s.is_dc);
 
   partMap.forEach((data, pn) => {
-    const ytdCounts = data.months;
-    const computedForecast = calculateLinearRegressionForecast(ytdCounts, ytdCounts.length + 1);
+    // Only pass historical months (e.g. Jan..Jul) prior to target month
+    const historyMonths = data.months.length > targetMonthIdx
+      ? data.months.slice(0, targetMonthIdx)
+      : (data.months.length > 1 ? data.months.slice(0, data.months.length - 1) : data.months);
+    const computedForecast = calculateLinearRegressionForecast(historyMonths, targetMonthIdx + 1);
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
 
     forecastItems.push({
@@ -650,7 +845,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       part_number: pn,
       description: data.description,
       category_id: data.category_id,
-      ytd_monthly_counts: ytdCounts,
+      ytd_monthly_counts: data.months,
       computed_forecast: computedForecast,
       admin_override: null,
       final_forecast: computedForecast,
@@ -660,7 +855,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
 
     const siteDemands = nonDcBranchSites.map(s => ({
       siteId: s.id,
-      historicalDemand: data.siteCounts[s.id] || 1
+      historicalDemand: data.siteCounts[s.id] || 0
     }));
 
     const allocatedResults = calculateProportionalAllocation(computedForecast, siteDemands);
@@ -675,6 +870,9 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       part_id: `part-${pn}`,
       part_number: pn,
       description: data.description,
+      category_id: data.category_id,
+      forecasted_qty: computedForecast,
+      stocking_price: data.category_id === 'cat-display' ? 280 : 99,
       total_allocated_qty: computedForecast,
       w1_qty: split.week1,
       w2_qty: split.week2,
@@ -689,8 +887,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       description: data.description,
       category_id: data.category_id,
       iphone_model: data.description.replace(/^(Battery|Display),?\s*/i, ''),
-      stocking_price: data.category_id === 'cat-display' ? 280 : 150,
-      exchange_price: data.category_id === 'cat-display' ? 230 : 120,
+      stocking_price: data.category_id === 'cat-display' ? 280 : 99,
       safety_stock_pct: 0.05,
       is_active: true
     });

@@ -7,6 +7,7 @@ import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import DataImport from './components/DataImport';
 import Forecasting from './components/Forecasting';
+import SavedRecords from './components/SavedRecords';
 import PurchaseOrders from './components/PurchaseOrders';
 import ScanInReceiving from './components/ScanInReceiving';
 import AllocationMatrix from './components/AllocationMatrix';
@@ -43,6 +44,8 @@ function MainApp() {
         return <DataImport />;
       case 'forecast':
         return <Forecasting />;
+      case 'records':
+        return <SavedRecords />;
       case 'orders':
         return <PurchaseOrders />;
       case 'scan-in':

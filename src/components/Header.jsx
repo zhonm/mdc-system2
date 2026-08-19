@@ -30,6 +30,7 @@ export default function Header() {
     dashboard: 'Distribution Center Overview',
     import: 'GSX & Fixably Data Import (ETL)',
     forecast: 'Demand Forecasting & PO Recommendations',
+    records: 'Saved Period Records & Historical Archives',
     orders: 'Purchase Order Tracking',
     'scan-in': 'Receive Scan-In (Physical Barcode Scanner)',
     allocation: 'Master Allocation Matrix & Weekly Batches',

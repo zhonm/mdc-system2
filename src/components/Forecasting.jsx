@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { calculateLinearRegressionForecast, calculateRecommendedOrder } from '../utils/forecastEngine';
-import { Download, Sliders, TrendingUp, Info, UploadCloud } from 'lucide-react';
+import SaveRecordModal from './SaveRecordModal';
+import { Download, Sliders, TrendingUp, Info, UploadCloud, BookmarkPlus } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 export default function Forecasting() {
@@ -15,6 +16,7 @@ export default function Forecasting() {
   } = useApp();
 
   const [safetyBufferPct, setSafetyBufferPct] = useState(5); // 5% default
+  const [showSaveModal, setShowSaveModal] = useState(false);
 
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug'];
 
@@ -73,7 +75,7 @@ export default function Forecasting() {
             </p>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
             {/* Safety Stock Slider */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-muted)' }}>
@@ -95,6 +97,16 @@ export default function Forecasting() {
 
             <button
               className="btn btn-secondary btn-sm"
+              onClick={() => setShowSaveModal(true)}
+              disabled={filteredItems.length === 0}
+              title="Save current forecast as a dated historical record"
+            >
+              <BookmarkPlus size={14} />
+              <span>Save as Record</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
               onClick={exportForecastExcel}
               disabled={filteredItems.length === 0}
             >
@@ -104,6 +116,15 @@ export default function Forecasting() {
           </div>
         </div>
       </div>
+
+      {/* Save Record Modal Dialog */}
+      {showSaveModal && (
+        <SaveRecordModal
+          isOpen={showSaveModal}
+          onClose={() => setShowSaveModal(false)}
+          defaultType="forecast"
+        />
+      )}
 
       {/* Empty State or Forecasting Grid */}
       {filteredItems.length === 0 ? (

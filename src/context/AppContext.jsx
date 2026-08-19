@@ -12,6 +12,7 @@ export const ALL_PAGES = [
   { id: 'dashboard', label: 'DC Overview', section: 'Core' },
   { id: 'import', label: 'Fixably / GSX Data Import', section: 'Planning' },
   { id: 'forecast', label: 'Demand Forecasting', section: 'Planning' },
+  { id: 'records', label: 'Saved Period Records', section: 'Planning' },
   { id: 'orders', label: 'Purchase Orders', section: 'Planning' },
   { id: 'scan-in', label: 'Receive Scan-In', section: 'Warehouse Operations' },
   { id: 'allocation', label: 'Allocation Matrix', section: 'Warehouse Operations' },
@@ -24,11 +25,11 @@ export const ALL_PAGES = [
 
 // Sensible default page permissions per role
 export const ROLE_PRESETS = {
-  superadmin: ['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'allocation', 'scan-out', 'shipments', 'audit', 'settings', 'user-access'],
-  admin: ['dashboard', 'import', 'forecast', 'orders', 'allocation', 'shipments', 'audit', 'settings'],
+  superadmin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'allocation', 'scan-out', 'shipments', 'audit', 'settings', 'user-access'],
+  admin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'allocation', 'shipments', 'audit', 'settings'],
   warehouse_staff: ['dashboard', 'scan-in', 'allocation', 'scan-out', 'shipments'],
   site_staff: ['dashboard', 'shipments'],
-  management_viewer: ['dashboard', 'forecast', 'allocation', 'shipments', 'audit']
+  management_viewer: ['dashboard', 'forecast', 'records', 'allocation', 'shipments', 'audit']
 };
 
 // Initial provisioned users for instant testing & demonstration
@@ -925,6 +926,15 @@ export function AppProvider({ children }) {
     }
   });
 
+  const [savedRecords, setSavedRecords] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_saved_records');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   // Persistent storage synchronizer with quota protection and error isolation
   useEffect(() => {
     const safeSet = (key, val) => {
@@ -945,7 +955,8 @@ export function AppProvider({ children }) {
     safeSet('mdc_shipments', shipments);
     safeSet('mdc_scan_logs', (scanLogs || []).slice(0, 300));
     safeSet('mdc_repair_usage', (repairUsageRecords || []).slice(0, 300));
-  }, [categories, sites, parts, forecastItems, allocations, inventoryUnits, purchaseOrders, shipments, scanLogs, repairUsageRecords]);
+    safeSet('mdc_saved_records', (savedRecords || []).slice(0, 50));
+  }, [categories, sites, parts, forecastItems, allocations, inventoryUnits, purchaseOrders, shipments, scanLogs, repairUsageRecords, savedRecords]);
 
   // Initial Supabase Hydration check and Realtime Sync on app mount
   useEffect(() => {
@@ -1112,6 +1123,40 @@ export function AppProvider({ children }) {
             localStorage.setItem('mdc_allocations', JSON.stringify(mappedAllocs));
           } catch (e) {}
         }
+
+        // 6. Hydrate Saved Period Records from Supabase
+        const { data: dbRecords } = await supabase
+          .from('saved_records')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(100);
+
+        if (dbRecords && dbRecords.length > 0) {
+          setSavedRecords(prev => {
+            const map = new Map((prev || []).map(r => [r.id, r]));
+            dbRecords.forEach(dbR => {
+              map.set(dbR.id, {
+                id: dbR.id,
+                record_type: dbR.record_type || 'both',
+                period_label: dbR.period_label || 'Saved Record',
+                period_year: dbR.period_year,
+                period_month: dbR.period_month,
+                period_week: dbR.period_week,
+                notes: dbR.notes || '',
+                saved_by_name: dbR.saved_by_name || 'System User',
+                saved_by_user_id: dbR.saved_by_user_id,
+                snapshot_data: dbR.snapshot_data || {},
+                created_at: dbR.created_at,
+                updated_at: dbR.updated_at
+              });
+            });
+            const merged = Array.from(map.values()).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            try {
+              localStorage.setItem('mdc_saved_records', JSON.stringify(merged.slice(0, 50)));
+            } catch (e) {}
+            return merged;
+          });
+        }
       } catch (e) {
         console.warn('Supabase initial fetch skipped (offline or unauthenticated):', e.message);
       }
@@ -1134,6 +1179,9 @@ export function AppProvider({ children }) {
             hydrateFromSupabase();
           })
           .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+            hydrateFromSupabase();
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'saved_records' }, () => {
             hydrateFromSupabase();
           })
           .subscribe();
@@ -1187,7 +1235,10 @@ export function AppProvider({ children }) {
           });
         }
         setForecastItems(payload.forecastItems || []);
-        showToast(`Dynamic forecast matrix updated with ${payload.forecastItems?.length || 0} parts from "${sheetName}"!`, 'success');
+        if (payload.allocations && payload.allocations.length > 0) {
+          setAllocations(payload.allocations);
+        }
+        showToast(`Dynamic forecast matrix updated with ${payload.forecastItems?.length || 0} parts and fair allocations from "${sheetName}"!`, 'success');
         setActiveTab('forecast');
       } else if (type === 'ALLOCATION') {
         if (payload.sites && payload.sites.length > 0) {
@@ -1339,7 +1390,6 @@ export function AppProvider({ children }) {
         category_id: 'cat-battery',
         iphone_model: 'iPhone Model',
         stocking_price: 100,
-        exchange_price: 80,
         is_active: true
       };
       setParts(prev => [newPart, ...prev]);
@@ -1496,7 +1546,6 @@ export function AppProvider({ children }) {
           category_id: 'cat-battery',
           iphone_model: 'iPhone Model',
           stocking_price: 100,
-          exchange_price: 80,
           is_active: true
         };
         currentParts = [newPart, ...currentParts];
@@ -2063,7 +2112,6 @@ export function AppProvider({ children }) {
             description: p.description,
             iphone_model: p.iphone_model || '',
             stocking_price: p.stocking_price || 0,
-            exchange_price: p.exchange_price || 0,
             safety_stock_pct: p.safety_stock_pct || 0.05,
             is_active: p.is_active ?? true,
             ...(catId ? { category_id: catId } : {})
@@ -2211,6 +2259,223 @@ export function AppProvider({ children }) {
     }
   };
 
+  // --- PERIOD-BASED SAVED RECORDS (FORECAST & ALLOCATION HISTORICAL SNAPSHOTS) ---
+
+  // 1. Save Current Working Data as a New Labeled Historical Record
+  const savePeriodRecord = async ({
+    recordType = 'both', // 'forecast' | 'allocation' | 'both'
+    periodLabel,
+    periodYear,
+    periodMonth,
+    periodWeek = null,
+    notes = ''
+  }) => {
+    // 1. Validate data availability
+    if (recordType === 'forecast' && (!forecastItems || forecastItems.length === 0)) {
+      showToast('Cannot save record: Forecast matrix has no items.', 'error');
+      return { success: false, error: 'Forecast table is empty' };
+    }
+
+    if (recordType === 'allocation' && (!allocations || allocations.length === 0)) {
+      showToast('Cannot save record: Allocation matrix has no items.', 'error');
+      return { success: false, error: 'Allocation table is empty' };
+    }
+
+    if (recordType === 'both' && (!forecastItems || forecastItems.length === 0) && (!allocations || allocations.length === 0)) {
+      showToast('Cannot save record: Both Forecast and Allocation tables are empty.', 'error');
+      return { success: false, error: 'Both tables are empty' };
+    }
+
+    const cleanLabel = (periodLabel || '').trim();
+    if (!cleanLabel) {
+      showToast('Please provide a name or label for this period record.', 'warning');
+      return { success: false, error: 'Missing period label' };
+    }
+
+    // 2. Compute Summary Metrics
+    const totalForecastUnits = (forecastItems || []).reduce((sum, item) => sum + (item.final_forecast || item.computed_forecast || 0), 0);
+    const totalAllocatedUnits = (allocations || []).reduce((sum, item) => sum + (item.total_allocated_qty || 0), 0);
+    const activeSitesCount = (sites || []).filter(s => !s.is_dc).length;
+
+    let grandTotalValue = 0;
+    (allocations || []).forEach(item => {
+      const part = (parts || []).find(p => p.id === item.part_id || p.part_number === item.part_number);
+      const price = part?.stocking_price || (item.description?.toLowerCase().includes('display') ? 280 : 150);
+      grandTotalValue += (item.total_allocated_qty || 0) * price;
+    });
+
+    // 3. Build Self-Contained Snapshot
+    const snapshotData = {
+      forecastItems: recordType !== 'allocation' ? JSON.parse(JSON.stringify(forecastItems || [])) : [],
+      allocations: recordType !== 'forecast' ? JSON.parse(JSON.stringify(allocations || [])) : [],
+      parts: JSON.parse(JSON.stringify(parts || [])),
+      sites: JSON.parse(JSON.stringify(sites || [])),
+      summary: {
+        totalForecastUnits,
+        totalAllocatedUnits,
+        totalForecastParts: recordType !== 'allocation' ? (forecastItems || []).length : 0,
+        totalAllocatedParts: recordType !== 'forecast' ? (allocations || []).length : 0,
+        totalSites: activeSitesCount,
+        grandTotalValue
+      }
+    };
+
+    const newRecordId = `rec-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    const newRecord = {
+      id: newRecordId,
+      record_type: recordType,
+      period_label: cleanLabel,
+      period_year: parseInt(periodYear) || new Date().getFullYear(),
+      period_month: parseInt(periodMonth) || (new Date().getMonth() + 1),
+      period_week: periodWeek ? parseInt(periodWeek) : null,
+      notes: (notes || '').trim(),
+      saved_by_name: currentUser?.fullName || 'Warehouse Operations',
+      saved_by_user_id: currentUser?.id && !currentUser.id.startsWith('usr-') ? currentUser.id : null,
+      snapshot_data: snapshotData,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    // 4. Update Local State immediately
+    setSavedRecords(prev => [newRecord, ...prev]);
+
+    try {
+      const currentSaved = [newRecord, ...savedRecords].slice(0, 50);
+      localStorage.setItem('mdc_saved_records', JSON.stringify(currentSaved));
+    } catch (e) {
+      console.warn('LocalStorage save notice for saved records:', e);
+    }
+
+    // 5. Cloud Backup to Supabase
+    if (supabase) {
+      (async () => {
+        try {
+          const { error } = await supabase.from('saved_records').upsert({
+            id: newRecord.id,
+            record_type: newRecord.record_type,
+            period_label: newRecord.period_label,
+            period_year: newRecord.period_year,
+            period_month: newRecord.period_month,
+            period_week: newRecord.period_week,
+            notes: newRecord.notes,
+            saved_by_name: newRecord.saved_by_name,
+            saved_by_user_id: newRecord.saved_by_user_id,
+            snapshot_data: newRecord.snapshot_data,
+            created_at: newRecord.created_at,
+            updated_at: newRecord.updated_at
+          });
+          if (error) throw error;
+        } catch (dbErr) {
+          console.warn('Supabase saved_records cloud sync note (saved locally):', dbErr.message);
+        }
+      })();
+    }
+
+    showToast(`Saved period record: "${newRecord.period_label}"`, 'success');
+    return { success: true, record: newRecord };
+  };
+
+  // 2. Restore a Historical Record into Live Working Tables
+  const restorePeriodRecord = (recordId, options = { restoreForecast: true, restoreAllocation: true }) => {
+    const record = savedRecords.find(r => r.id === recordId);
+    if (!record) {
+      showToast('Record not found', 'error');
+      return { success: false, error: 'Record not found' };
+    }
+
+    const snap = record.snapshot_data || {};
+
+    // 1. Safely merge any missing parts from the snapshot catalog
+    if (snap.parts && snap.parts.length > 0) {
+      setParts(prev => {
+        const map = new Map((prev || []).map(p => [p.part_number, p]));
+        snap.parts.forEach(p => {
+          if (!map.has(p.part_number)) map.set(p.part_number, p);
+        });
+        const merged = Array.from(map.values());
+        try { localStorage.setItem('mdc_parts', JSON.stringify(merged)); } catch (e) {}
+        return merged;
+      });
+    }
+
+    // 2. Safely merge any missing sites from the snapshot catalog
+    if (snap.sites && snap.sites.length > 0) {
+      setSites(prev => {
+        const map = new Map((prev || []).map(s => [s.code, s]));
+        snap.sites.forEach(s => {
+          if (!map.has(s.code)) map.set(s.code, s);
+        });
+        const merged = Array.from(map.values());
+        try { localStorage.setItem('mdc_sites', JSON.stringify(merged)); } catch (e) {}
+        return merged;
+      });
+    }
+
+    let restoredCountDesc = [];
+
+    // 3. Restore Forecast items if requested & present
+    if (options.restoreForecast && snap.forecastItems && snap.forecastItems.length > 0) {
+      setForecastItems(snap.forecastItems);
+      try {
+        localStorage.setItem('mdc_forecast', JSON.stringify(snap.forecastItems));
+      } catch (e) {}
+      restoredCountDesc.push(`${snap.forecastItems.length} forecasts`);
+    }
+
+    // 4. Restore Allocations if requested & present
+    if (options.restoreAllocation && snap.allocations && snap.allocations.length > 0) {
+      setAllocations(snap.allocations);
+      try {
+        localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations));
+      } catch (e) {}
+      restoredCountDesc.push(`${snap.allocations.length} allocations`);
+    }
+
+    const descStr = restoredCountDesc.length > 0 ? ` (${restoredCountDesc.join(', ')})` : '';
+    showToast(`Loaded record "${record.period_label}" into live working tables${descStr}!`, 'success');
+
+    // Automatically navigate to appropriate page
+    if (options.restoreForecast && !options.restoreAllocation) {
+      setActiveTab('forecast');
+    } else if (options.restoreAllocation && !options.restoreForecast) {
+      setActiveTab('allocation');
+    } else if (snap.forecastItems && snap.forecastItems.length > 0) {
+      setActiveTab('forecast');
+    } else if (snap.allocations && snap.allocations.length > 0) {
+      setActiveTab('allocation');
+    }
+
+    return { success: true };
+  };
+
+  // 3. Delete a Historical Saved Record
+  const deletePeriodRecord = async (recordId) => {
+    const record = savedRecords.find(r => r.id === recordId);
+    if (!record) {
+      return { success: false, error: 'Record not found' };
+    }
+
+    const nextList = savedRecords.filter(r => r.id !== recordId);
+    setSavedRecords(nextList);
+
+    try {
+      localStorage.setItem('mdc_saved_records', JSON.stringify(nextList.slice(0, 50)));
+    } catch (e) {
+      console.warn('LocalStorage delete error:', e);
+    }
+
+    if (supabase) {
+      try {
+        await supabase.from('saved_records').delete().eq('id', recordId);
+      } catch (dbErr) {
+        console.warn('Supabase delete saved_record notice:', dbErr.message);
+      }
+    }
+
+    showToast(`Permanently deleted record "${record.period_label}"`, 'info');
+    return { success: true };
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -2250,6 +2515,10 @@ export function AppProvider({ children }) {
         shipments,
         scanLogs,
         repairUsageRecords,
+        savedRecords,
+        savePeriodRecord,
+        restorePeriodRecord,
+        deletePeriodRecord,
         addScanInUnit,
         batchAddScanInUnits,
         addScanOutUnit,

@@ -85,7 +85,6 @@ CREATE TABLE IF NOT EXISTS parts (
     description TEXT NOT NULL,
     iphone_model TEXT,
     stocking_price NUMERIC(10,2) DEFAULT 0,
-    exchange_price NUMERIC(10,2) DEFAULT 0,
     safety_stock_pct NUMERIC(5,2) DEFAULT 0.05,
     is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -389,7 +388,7 @@ ON CONFLICT (id) DO UPDATE SET
 DO $$
 DECLARE
     uid UUID;
-    pages TEXT[] := ARRAY['dashboard', 'import', 'forecast', 'orders', 'scan-in', 'allocation', 'scan-out', 'shipments', 'audit', 'settings', 'user-access'];
+    pages TEXT[] := ARRAY['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'allocation', 'scan-out', 'shipments', 'audit', 'settings', 'user-access'];
     p TEXT;
 BEGIN
     FOR uid IN SELECT id FROM profiles WHERE role = 'superadmin' LOOP
@@ -400,4 +399,30 @@ BEGIN
         END LOOP;
     END LOOP;
 END $$;
+
+-- 17. Period-Based Saved Records Snapshots Table
+CREATE TABLE IF NOT EXISTS saved_records (
+    id TEXT PRIMARY KEY,
+    record_type TEXT NOT NULL DEFAULT 'both',
+    period_label TEXT NOT NULL,
+    period_year INT NOT NULL,
+    period_month INT NOT NULL,
+    period_week INT,
+    notes TEXT,
+    saved_by_name TEXT,
+    saved_by_user_id UUID REFERENCES profiles(id) ON DELETE SET NULL,
+    snapshot_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_saved_records_created_at ON saved_records(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_saved_records_type ON saved_records(record_type);
+CREATE INDEX IF NOT EXISTS idx_saved_records_period ON saved_records(period_year, period_month);
+
+ALTER TABLE saved_records ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow public read of saved_records" ON saved_records FOR SELECT TO public USING (true);
+CREATE POLICY "Allow public insert of saved_records" ON saved_records FOR INSERT TO public WITH CHECK (true);
+CREATE POLICY "Allow public update of saved_records" ON saved_records FOR UPDATE TO public USING (true) WITH CHECK (true);
+CREATE POLICY "Allow public delete of saved_records" ON saved_records FOR DELETE TO public USING (true);
+
 

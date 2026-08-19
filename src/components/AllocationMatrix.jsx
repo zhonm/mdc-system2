@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { exportAllocationToExcel } from '../utils/excelParser';
 import { calculateWeeklySplit } from '../utils/allocationEngine';
+import SaveRecordModal from './SaveRecordModal';
 import {
   Split,
   Download,
@@ -15,14 +16,15 @@ import {
   Percent,
   CheckCircle2,
   Smartphone,
-  BatteryCharging
+  BatteryCharging,
+  BookmarkPlus
 } from 'lucide-react';
 
 const CANONICAL_SITE_CODES = [
   'APP BHS', 'APP GB3', 'APP PPM', 'ASP GL5', 'ASP SMS', 'APP MOA', 'ASP POD',
-  'APP MEG', 'APP ANX', 'APP TRI', 'ASP VN', 'ASP NES', 'APP PAM', 'ASP MRK',
-  'APP ROB', 'ASP CEB', 'APP CDO', 'APP DAV', 'ASP TAC', 'ASP ILO', 'ASP BAC',
-  'ASP ZAM', 'ASP BGO', 'ASP SGO', 'ASP LMA', 'ASP NPM'
+  'APP MEG', 'APP ANX', 'APP TRI', 'ASP VN', 'ASP NES', 'APP FES', 'ASP MRK',
+  'APP RM', 'ASP LIM', 'ASP NPM', 'ASP NAG', 'ASP LAU', 'ASP ILO', 'ASP CEB',
+  'ASP ZAM', 'ASP ABR', 'ASP COT', 'ASP CDO', 'APP LAN'
 ];
 
 export default function AllocationMatrix() {
@@ -39,17 +41,25 @@ export default function AllocationMatrix() {
   } = useApp();
 
   const [activeViewMode, setActiveViewMode] = useState('sheet'); // 'sheet' | 'shares'
+  const [showSaveModal, setShowSaveModal] = useState(false);
 
   // Sort and filter service sites to match canonical Google Sheet order
-  const nonDcSites = sites.filter(s => !s.is_dc);
+  const nonDcSites = sites.filter(s =>
+    !s.is_dc &&
+    !s.code.toUpperCase().includes('DC') &&
+    !s.code.toUpperCase().includes('MOBILEC') &&
+    !s.name.toLowerCase().includes('distribution') &&
+    s.code !== 'DC-MDC'
+  );
+
   const orderedServiceSites = [...nonDcSites].sort((a, b) => {
     const idxA = CANONICAL_SITE_CODES.findIndex(c => c.includes(a.code) || a.code.includes(c) || a.name.includes(c));
-    const idxB = CANONICAL_SITE_CODES.findIndex(c => c.includes(b.code) || b.code.includes(c) || b.name.includes(c));
+    const idxB = CANONICAL_SITE_CODES.findIndex(c => c.includes(b.code) || b.code.includes(b) || b.name.includes(c));
     if (idxA >= 0 && idxB >= 0) return idxA - idxB;
     if (idxA >= 0) return -1;
     if (idxB >= 0) return 1;
     return a.code.localeCompare(b.code);
-  });
+  }).filter((s, idx, arr) => arr.findIndex(x => x.code === s.code) === idx);
 
   // Filter items by category
   const filteredAllocations = allocations.filter(item => {
@@ -66,36 +76,69 @@ export default function AllocationMatrix() {
   // Split into Displays, Batteries, and Other
   const displayItems = filteredAllocations.filter(item => {
     const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-    return part?.category_id === 'cat-display' || item.description?.toLowerCase().includes('display') || item.description?.toLowerCase().includes('screen');
+    return part?.category_id === 'cat-display' || item.category_id === 'cat-display' || item.description?.toLowerCase().includes('display') || item.description?.toLowerCase().includes('screen');
   });
 
   const batteryItems = filteredAllocations.filter(item => {
     const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-    return part?.category_id === 'cat-battery' || (!displayItems.includes(item) && (item.description?.toLowerCase().includes('battery') || item.description?.toLowerCase().includes('batt')));
+    return part?.category_id === 'cat-battery' || item.category_id === 'cat-battery' || (!displayItems.includes(item) && (item.description?.toLowerCase().includes('battery') || item.description?.toLowerCase().includes('batt')));
   });
 
   const otherItems = filteredAllocations.filter(item => !displayItems.includes(item) && !batteryItems.includes(item));
 
-  // Compute site column totals & financial breakdowns
-  const totalAllocatedAllParts = filteredAllocations.reduce((sum, item) => sum + (item.total_allocated_qty || 0), 0);
+  // Compute category sub-totals and site breakdowns
+  const computeGroupTotals = (items) => {
+    let totalQty = 0;
+    let totalCost = 0;
+    let totalW1 = 0;
+    let totalW2 = 0;
+    let totalW3 = 0;
+    let totalW4 = 0;
+    const perSite = {};
+    orderedServiceSites.forEach(s => { perSite[s.id] = 0; });
 
-  const siteTotals = {};
+    items.forEach((item, idx) => {
+      const qty = item.total_allocated_qty || 0;
+      const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
+      const price = item.stocking_price || part?.stocking_price || 0;
+      const split = calculateWeeklySplit(qty, idx);
+
+      totalQty += qty;
+      totalCost += qty * price;
+      totalW1 += split.week1;
+      totalW2 += split.week2;
+      totalW3 += split.week3;
+      totalW4 += split.week4;
+
+      orderedServiceSites.forEach(s => {
+        perSite[s.id] = (perSite[s.id] || 0) + (item.site_quantities?.[s.id] || 0);
+      });
+    });
+
+    return { totalQty, totalCost, totalW1, totalW2, totalW3, totalW4, perSite };
+  };
+
+  const displayTotals = computeGroupTotals(displayItems);
+  const batteryTotals = computeGroupTotals(batteryItems);
+  const grandGroupTotals = computeGroupTotals(filteredAllocations);
+
+  // Compute site column totals & financial breakdowns
+  const totalAllocatedAllParts = grandGroupTotals.totalQty;
+  const siteTotals = grandGroupTotals.perSite;
+  
   const siteCostTotals = {};
   orderedServiceSites.forEach(s => {
-    let sumQty = 0;
     let sumCost = 0;
     filteredAllocations.forEach(item => {
       const qty = item.site_quantities?.[s.id] || 0;
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const price = part?.stocking_price || (item.description?.toLowerCase().includes('display') ? 280 : 150);
-      sumQty += qty;
+      const price = item.stocking_price || part?.stocking_price || 0;
       sumCost += qty * price;
     });
-    siteTotals[s.id] = sumQty;
     siteCostTotals[s.id] = sumCost;
   });
 
-  const grandTotalCost = Object.values(siteCostTotals).reduce((sum, c) => sum + c, 0);
+  const grandTotalCost = grandGroupTotals.totalCost;
 
   const handleExport = () => {
     if (filteredAllocations.length === 0) {
@@ -109,7 +152,6 @@ export default function AllocationMatrix() {
   const renderItemRow = (item, commodityLabel, index) => {
     const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
     const stockPrice = part?.stocking_price || (commodityLabel === 'DISPLAY' ? 280 : 150);
-    const exchangePrice = part?.exchange_price || (commodityLabel === 'DISPLAY' ? 230 : 120);
     const split = calculateWeeklySplit(item.total_allocated_qty, index);
     const totalStockPrice = (item.total_allocated_qty || 0) * stockPrice;
     const isOrderRequired = (item.total_allocated_qty || 0) > 0;
@@ -146,11 +188,6 @@ export default function AllocationMatrix() {
         {/* Stock Price */}
         <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '12px', fontWeight: 600, color: '#0f172a' }}>
           ${stockPrice.toFixed(2)}
-        </td>
-
-        {/* Exch Price */}
-        <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: '12px', fontWeight: 500, color: '#475569' }}>
-          ${exchangePrice.toFixed(2)}
         </td>
 
         {/* 26 Site Branch Quantities or Shares */}
@@ -295,6 +332,17 @@ export default function AllocationMatrix() {
 
             <button
               className="btn btn-secondary btn-sm"
+              onClick={() => setShowSaveModal(true)}
+              disabled={filteredAllocations.length === 0}
+              title="Save current allocation matrix as a dated historical record"
+              style={{ fontWeight: 600, padding: '6px 14px' }}
+            >
+              <BookmarkPlus size={14} />
+              <span>Save as Record</span>
+            </button>
+
+            <button
+              className="btn btn-secondary btn-sm"
               onClick={handleExport}
               disabled={filteredAllocations.length === 0}
               style={{ fontWeight: 600, padding: '6px 14px' }}
@@ -304,6 +352,15 @@ export default function AllocationMatrix() {
             </button>
           </div>
         </div>
+
+        {/* Save Record Modal Dialog */}
+        {showSaveModal && (
+          <SaveRecordModal
+            isOpen={showSaveModal}
+            onClose={() => setShowSaveModal(false)}
+            defaultType="allocation"
+          />
+        )}
 
         {/* High Contrast KPI Summary Bar */}
         {filteredAllocations.length > 0 && (
@@ -400,9 +457,6 @@ export default function AllocationMatrix() {
                   <th style={{ position: 'sticky', top: 0, background: '#1e293b', color: '#f8fafc', textAlign: 'right', zIndex: 12, minWidth: '85px' }}>
                     Stock Price
                   </th>
-                  <th style={{ position: 'sticky', top: 0, background: '#1e293b', color: '#cbd5e1', textAlign: 'right', zIndex: 12, minWidth: '85px' }}>
-                    Exch Price
-                  </th>
 
                   {/* 26 Site Branch Headers */}
                   {orderedServiceSites.map(s => (
@@ -451,7 +505,7 @@ export default function AllocationMatrix() {
                 {displayItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
-                      <td colSpan={orderedServiceSites.length + 12}>
+                      <td colSpan={orderedServiceSites.length + 11}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <Smartphone size={16} color="#0284c7" />
                           <span>DISPLAY COMMODITY</span>
@@ -462,6 +516,35 @@ export default function AllocationMatrix() {
                       </td>
                     </tr>
                     {displayItems.map((item, idx) => renderItemRow(item, 'DISPLAY', idx))}
+                    {/* DISPLAY SUB-TOTAL (Matching Excel Row 24) */}
+                    <tr style={{ background: '#f0f9ff', fontWeight: 700, borderTop: '2px solid #bae6fd', borderBottom: '2px solid #bae6fd' }}>
+                      <td className="matrix-col-sticky-1 matrix-subtotal-td" style={{ background: '#f0f9ff', textAlign: 'center' }}>
+                        <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 5px', borderRadius: '4px', background: '#0284c7', color: '#ffffff' }}>DISPLAY</span>
+                      </td>
+                      <td className="matrix-col-sticky-2 font-mono matrix-subtotal-td" style={{ background: '#f0f9ff', color: '#0369a1', fontSize: '11px', fontWeight: 800 }}>
+                        SUB-TOTAL
+                      </td>
+                      <td className="matrix-col-sticky-3 matrix-subtotal-td" style={{ background: '#f0f9ff', color: '#0369a1', fontSize: '11.5px', fontWeight: 700 }}>
+                        {displayItems.length} Parts Sub-Total
+                      </td>
+                      <td style={{ textAlign: 'right', fontSize: '11px', color: '#64748b', background: '#f0f9ff' }}>—</td>
+                      {orderedServiceSites.map(s => (
+                        <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#0369a1', fontSize: '11px', fontWeight: 700, background: '#f0f9ff' }}>
+                          {displayTotals.perSite[s.id] || 0}
+                        </td>
+                      ))}
+                      <td style={{ textAlign: 'center', background: '#e0f2fe', color: '#0369a1', fontSize: '12.5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
+                        {displayTotals.totalQty}
+                      </td>
+                      <td style={{ textAlign: 'right', color: '#0369a1', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11.5px', background: '#f0f9ff' }}>
+                        ${displayTotals.totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#0369a1', background: '#f0f9ff' }}>{displayTotals.totalW1}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#0369a1', background: '#f0f9ff' }}>{displayTotals.totalW2}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#0369a1', background: '#f0f9ff' }}>{displayTotals.totalW3}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#0369a1', background: '#f0f9ff' }}>{displayTotals.totalW4}</td>
+                      <td colSpan={2} style={{ background: '#f0f9ff' }}></td>
+                    </tr>
                   </>
                 )}
 
@@ -469,7 +552,7 @@ export default function AllocationMatrix() {
                 {batteryItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
-                      <td colSpan={orderedServiceSites.length + 12}>
+                      <td colSpan={orderedServiceSites.length + 11}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <BatteryCharging size={16} color="#15803d" />
                           <span>BATTERY COMMODITY</span>
@@ -480,6 +563,35 @@ export default function AllocationMatrix() {
                       </td>
                     </tr>
                     {batteryItems.map((item, idx) => renderItemRow(item, 'BATTERY', idx + displayItems.length))}
+                    {/* BATTERY SUB-TOTAL (Matching Excel Row 43) */}
+                    <tr style={{ background: '#f0fdf4', fontWeight: 700, borderTop: '2px solid #bbf7d0', borderBottom: '2px solid #bbf7d0' }}>
+                      <td className="matrix-col-sticky-1 matrix-subtotal-td" style={{ background: '#f0fdf4', textAlign: 'center' }}>
+                        <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 5px', borderRadius: '4px', background: '#16a34a', color: '#ffffff' }}>BATTERY</span>
+                      </td>
+                      <td className="matrix-col-sticky-2 font-mono matrix-subtotal-td" style={{ background: '#f0fdf4', color: '#15803d', fontSize: '11px', fontWeight: 800 }}>
+                        SUB-TOTAL
+                      </td>
+                      <td className="matrix-col-sticky-3 matrix-subtotal-td" style={{ background: '#f0fdf4', color: '#15803d', fontSize: '11.5px', fontWeight: 700 }}>
+                        {batteryItems.length} Parts Sub-Total
+                      </td>
+                      <td style={{ textAlign: 'right', fontSize: '11px', color: '#64748b', background: '#f0fdf4' }}>—</td>
+                      {orderedServiceSites.map(s => (
+                        <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#15803d', fontSize: '11px', fontWeight: 700, background: '#f0fdf4' }}>
+                          {batteryTotals.perSite[s.id] || 0}
+                        </td>
+                      ))}
+                      <td style={{ textAlign: 'center', background: '#dcfce7', color: '#15803d', fontSize: '12.5px', fontWeight: 800, fontFamily: 'var(--font-mono)' }}>
+                        {batteryTotals.totalQty}
+                      </td>
+                      <td style={{ textAlign: 'right', color: '#15803d', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '11.5px', background: '#f0fdf4' }}>
+                        ${batteryTotals.totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#15803d', background: '#f0fdf4' }}>{batteryTotals.totalW1}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#15803d', background: '#f0fdf4' }}>{batteryTotals.totalW2}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#15803d', background: '#f0fdf4' }}>{batteryTotals.totalW3}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#15803d', background: '#f0fdf4' }}>{batteryTotals.totalW4}</td>
+                      <td colSpan={2} style={{ background: '#f0fdf4' }}></td>
+                    </tr>
                   </>
                 )}
 
@@ -487,7 +599,7 @@ export default function AllocationMatrix() {
                 {otherItems.length > 0 && (
                   <>
                     <tr className="matrix-category-header">
-                      <td colSpan={orderedServiceSites.length + 12}>
+                      <td colSpan={orderedServiceSites.length + 11}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <Layers size={16} color="#64748b" />
                           <span>OTHER COMMODITIES</span>
@@ -506,13 +618,18 @@ export default function AllocationMatrix() {
               <tfoot>
                 {/* 1. Total Parts per Site Row */}
                 <tr className="matrix-footer-row-1">
-                  <td colSpan={3} className="matrix-footer-sticky-label" style={{ paddingLeft: '14px', fontSize: '11.5px', letterSpacing: '0.04em' }}>
+                  <td className="matrix-footer-sticky-1" style={{ textAlign: 'center' }}>
+                    <span style={{ fontSize: '9.5px', fontWeight: 800, padding: '2px 5px', borderRadius: '3px', background: '#38bdf8', color: '#0f172a' }}>TOTAL</span>
+                  </td>
+                  <td className="matrix-footer-sticky-2 font-mono" style={{ color: '#38bdf8', fontSize: '11px', fontWeight: 800 }}>
+                    PARTS
+                  </td>
+                  <td className="matrix-footer-sticky-3" style={{ color: '#f8fafc', fontSize: '11px', fontWeight: 800 }}>
                     TOTAL PARTS PER SITE
                   </td>
                   <td style={{ textAlign: 'right', color: '#64748b', fontSize: '11px' }}>—</td>
-                  <td style={{ textAlign: 'right', color: '#64748b', fontSize: '11px' }}>—</td>
                   {orderedServiceSites.map(s => (
-                    <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#38bdf8', fontSize: '12px', fontWeight: 800 }}>
+                    <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', color: '#38bdf8', fontSize: '11.5px', fontWeight: 800 }}>
                       {siteTotals[s.id] || 0}
                     </td>
                   ))}
@@ -522,25 +639,45 @@ export default function AllocationMatrix() {
                   <td style={{ textAlign: 'right', color: '#4ade80', fontWeight: 800, fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
                     ${grandTotalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </td>
-                  <td colSpan={6} style={{ background: '#0f172a' }}></td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW1}</td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW2}</td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW3}</td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11px', color: '#38bdf8', fontWeight: 800 }}>{grandGroupTotals.totalW4}</td>
+                  <td style={{ textAlign: 'center' }}>
+                    <span style={{ fontSize: '9.5px', fontWeight: 800, padding: '2px 6px', borderRadius: '4px', background: '#0284c7', color: '#ffffff' }}>TOTAL PLAN</span>
+                  </td>
+                  <td style={{ textAlign: 'center', color: '#64748b', fontSize: '11px' }}>—</td>
                 </tr>
 
                 {/* 2. Total Cost Breakdown per Site Row - FULLY HIGH-CONTRAST & READABLE */}
                 <tr className="matrix-footer-row-2">
-                  <td colSpan={3} className="matrix-footer-sticky-label" style={{ paddingLeft: '14px', color: '#f8fafc', fontSize: '11px', letterSpacing: '0.04em', background: '#1e293b' }}>
-                    TOTAL COST BREAKDOWN PER SITE
+                  <td className="matrix-footer-sticky-1" style={{ textAlign: 'center' }}>
+                    <span style={{ fontSize: '9.5px', fontWeight: 800, padding: '2px 5px', borderRadius: '3px', background: '#64748b', color: '#ffffff' }}>COST</span>
                   </td>
-                  <td style={{ textAlign: 'right', color: '#64748b', fontSize: '10px' }}>—</td>
+                  <td className="matrix-footer-sticky-2 font-mono" style={{ color: '#cbd5e1', fontSize: '10.5px', fontWeight: 700 }}>
+                    VALUATION
+                  </td>
+                  <td className="matrix-footer-sticky-3" style={{ color: '#e2e8f0', fontSize: '11px', fontWeight: 700 }}>
+                    TOTAL COST BREAKDOWN
+                  </td>
                   <td style={{ textAlign: 'right', color: '#64748b', fontSize: '10px' }}>—</td>
                   {orderedServiceSites.map(s => (
                     <td key={s.id} style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10.5px', color: '#e2e8f0', fontWeight: 600, padding: '6px 2px' }}>
                       ${Math.round(siteCostTotals[s.id] || 0).toLocaleString()}
                     </td>
                   ))}
+                  <td style={{ textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
+                    —
+                  </td>
                   <td style={{ textAlign: 'center', background: '#0369a1', color: '#ffffff', fontWeight: 800, fontFamily: 'var(--font-mono)', fontSize: '12px' }}>
                     ${Math.round(grandTotalCost).toLocaleString()}
                   </td>
-                  <td colSpan={6} style={{ background: '#1e293b' }}></td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W1</td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W2</td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W3</td>
+                  <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '10px', color: '#94a3b8' }}>W4</td>
+                  <td style={{ textAlign: 'center', color: '#64748b', fontSize: '10.5px' }}>—</td>
+                  <td style={{ textAlign: 'center', color: '#64748b', fontSize: '10.5px' }}>—</td>
                 </tr>
               </tfoot>
             </table>

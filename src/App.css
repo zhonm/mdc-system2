@@ -657,44 +657,50 @@
 
 /* ==========================================================
    Master Allocation Matrix & Weekly Batches Grid Styles
+/* ==========================================================
+   MASTER ALLOCATION MATRIX STYLING & SPREADSHEET LAYOUT
    ========================================================== */
 .allocation-matrix-container {
   width: 100%;
-  max-height: 720px;
+  max-height: calc(100vh - 240px);
+  min-height: 540px;
   overflow-x: auto;
   overflow-y: auto;
   position: relative;
   background: #ffffff;
   border-radius: var(--radius-md);
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 4px 14px -2px rgba(0, 0, 0, 0.07);
 }
 
 /* Master Table Core */
 .matrix-table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 12px;
 }
 
 .matrix-table th {
-  padding: 10px 8px;
+  padding: 9px 6px;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.03em;
   white-space: nowrap;
-  border-bottom: 1px solid #334155;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 2px solid #334155;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .matrix-table td {
-  padding: 6px 8px;
+  padding: 5px 6px;
   border-bottom: 1px solid #e2e8f0;
   border-right: 1px solid #f1f5f9;
   color: var(--text-main);
   vertical-align: middle;
 }
 
-.matrix-table tr:hover td {
+.matrix-table tbody tr:hover td:not(.matrix-subtotal-td) {
   background-color: #f8fafc !important;
 }
 
@@ -702,7 +708,7 @@
 .matrix-col-sticky-1 {
   position: sticky;
   left: 0;
-  z-index: 6;
+  z-index: 8;
   width: 80px;
   min-width: 80px;
   max-width: 80px;
@@ -711,50 +717,57 @@
 .matrix-col-sticky-2 {
   position: sticky;
   left: 80px;
-  z-index: 6;
-  width: 100px;
-  min-width: 100px;
-  max-width: 100px;
+  z-index: 8;
+  width: 95px;
+  min-width: 95px;
+  max-width: 95px;
 }
 
 .matrix-col-sticky-3 {
   position: sticky;
-  left: 180px;
-  z-index: 6;
-  min-width: 240px;
-  max-width: 280px;
+  left: 175px;
+  z-index: 8;
+  width: 220px;
+  min-width: 220px;
+  max-width: 220px;
   border-right: 2px solid #cbd5e1 !important;
-  box-shadow: 3px 0 6px -2px rgba(0, 0, 0, 0.08);
+  box-shadow: 4px 0 8px -3px rgba(0, 0, 0, 0.1);
 }
 
-/* Sticky Header Cells */
+/* Sticky Header Cells (top: 0) */
 .matrix-th-sticky-1 {
   position: sticky;
   top: 0;
   left: 0;
-  z-index: 30;
-  background: #0f172a;
+  z-index: 35;
+  background: #0f172a !important;
   color: #f8fafc;
+  width: 80px;
+  min-width: 80px;
 }
 
 .matrix-th-sticky-2 {
   position: sticky;
   top: 0;
   left: 80px;
-  z-index: 30;
-  background: #0f172a;
+  z-index: 35;
+  background: #0f172a !important;
   color: #f8fafc;
+  width: 95px;
+  min-width: 95px;
 }
 
 .matrix-th-sticky-3 {
   position: sticky;
   top: 0;
-  left: 180px;
-  z-index: 30;
-  background: #0f172a;
+  left: 175px;
+  z-index: 35;
+  background: #0f172a !important;
   color: #f8fafc;
+  width: 220px;
+  min-width: 220px;
   border-right: 2px solid #475569 !important;
-  box-shadow: 3px 0 6px -2px rgba(0, 0, 0, 0.2);
+  box-shadow: 4px 0 8px -3px rgba(0, 0, 0, 0.3);
 }
 
 /* Remove number spinners from input fields */
@@ -770,17 +783,17 @@
 
 /* Matrix Input Cell Styling */
 .matrix-cell-input {
-  width: 38px;
-  height: 26px;
+  width: 36px;
+  height: 25px;
   font-size: 11.5px;
   text-align: center;
   font-family: var(--font-mono);
   font-weight: 600;
-  border-radius: 4px;
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: #0f172a;
-  padding: 0 2px;
+  border-radius: 5px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
+  padding: 0;
   transition: all 0.15s ease;
   outline: none;
   display: inline-block;
@@ -788,6 +801,7 @@
 
 .matrix-cell-input:hover {
   border-color: #93c5fd;
+  background: #ffffff;
 }
 
 .matrix-cell-input:focus {
@@ -799,17 +813,22 @@
 }
 
 .matrix-cell-input.has-value {
-  background: #f0fdf4;
+  background: #ecfdf5;
   border-color: #86efac;
-  color: #166534;
+  color: #15803d;
   font-weight: 700;
 }
 
 .matrix-cell-input.is-zero {
-  background: #ffffff;
-  border-color: #e2e8f0;
+  background: transparent;
+  border-color: transparent;
   color: #94a3b8;
   font-weight: 400;
+}
+
+.matrix-cell-input.is-zero:hover {
+  border-color: #cbd5e1;
+  background: #ffffff;
 }
 
 /* KPI Summary Card on Allocation Matrix */
@@ -849,52 +868,68 @@
 }
 
 .matrix-category-header td {
-  padding: 10px 14px !important;
+  padding: 8px 14px !important;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 12.5px;
   color: #0f172a;
   letter-spacing: 0.03em;
   background: #f1f5f9 !important;
 }
 
+/* Subtotal Row Helpers */
+.matrix-subtotal-td {
+  padding: 7px 6px !important;
+  font-weight: 700 !important;
+}
+
 /* Table Footer - Sticky Bottom Styling */
-.matrix-footer-row-1 {
+.matrix-footer-row-1 td {
   position: sticky;
   bottom: 34px;
-  background: #0f172a;
+  background: #0f172a !important;
   color: #ffffff;
   font-weight: 700;
   z-index: 20;
-}
-
-.matrix-footer-row-1 td {
   border-top: 2px solid #38bdf8;
   border-bottom: 1px solid #1e293b;
   padding: 8px 6px;
-  background: #0f172a;
 }
 
-.matrix-footer-row-2 {
+.matrix-footer-row-2 td {
   position: sticky;
   bottom: 0;
-  background: #1e293b;
+  background: #1e293b !important;
   color: #e2e8f0;
   font-weight: 600;
   font-size: 11px;
   z-index: 20;
-}
-
-.matrix-footer-row-2 td {
   border-bottom: none;
-  padding: 8px 6px;
-  background: #1e293b;
+  padding: 7px 6px;
 }
 
-.matrix-footer-sticky-label {
+.matrix-footer-sticky-1 {
   position: sticky;
   left: 0;
-  z-index: 22;
+  z-index: 35 !important;
+  width: 80px;
+  min-width: 80px;
+}
+
+.matrix-footer-sticky-2 {
+  position: sticky;
+  left: 80px;
+  z-index: 35 !important;
+  width: 95px;
+  min-width: 95px;
+}
+
+.matrix-footer-sticky-3 {
+  position: sticky;
+  left: 175px;
+  z-index: 35 !important;
+  width: 220px;
+  min-width: 220px;
   border-right: 2px solid #475569 !important;
-  box-shadow: 3px 0 6px -2px rgba(0, 0, 0, 0.3);
+  box-shadow: 4px 0 8px -3px rgba(0, 0, 0, 0.3);
 }
 
