@@ -422,6 +422,7 @@ export function AppProvider({ children }) {
     setCurrentUser(user);
     const initialPage = user.permittedPages?.[0] || 'dashboard';
     setActiveTab(initialPage);
+    hydrateFromSupabase();
     showToast(`Welcome back, ${user.fullName}!`, 'success');
     return { success: true, user };
   };
@@ -1472,6 +1473,7 @@ export function AppProvider({ children }) {
       }
 
       // 7. Hydrate DC Intake Records from Supabase
+      let fetchedIntakes = [];
       try {
         const { data: dbIntakes } = await supabase
           .from('dc_intake_records')
@@ -1480,6 +1482,7 @@ export function AppProvider({ children }) {
           .limit(200);
 
         if (dbIntakes && dbIntakes.length > 0) {
+          fetchedIntakes = dbIntakes;
           setDcIntakeRecords(prev => {
             const map = new Map((prev || []).map(r => [r.id, r]));
             dbIntakes.forEach(dbI => {
@@ -1495,7 +1498,7 @@ export function AppProvider({ children }) {
                 saved_by_user_id: dbI.saved_by_user_id,
                 notes: dbI.notes || '',
                 category_breakdown: dbI.category_breakdown || {},
-                items: dbI.items || [],
+                items: Array.isArray(dbI.items) ? dbI.items : [],
                 created_at: dbI.created_at,
                 updated_at: dbI.updated_at
               });
@@ -1511,27 +1514,29 @@ export function AppProvider({ children }) {
         console.warn('dc_intake_records fetch note:', intakeErr.message);
       }
 
-      // 8. Hydrate Serialized Inventory Units from Supabase (Central Source of Truth)
+      // 8. Hydrate Serialized Inventory Units from Supabase (Central Multi-User Source of Truth)
       try {
         const { data: dbUnits } = await supabase
           .from('inventory_units')
-          .select('*, parts(part_number, description, stocking_price, category_id), sites(id, code, name)')
+          .select('*')
           .order('received_at', { ascending: false })
           .limit(2000);
 
-        if (dbUnits && dbUnits.length > 0) {
-          setInventoryUnits(prev => {
-            const map = new Map((prev || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
+        setInventoryUnits(prev => {
+          const map = new Map((prev || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
+
+          // 8a. Add units from inventory_units table
+          if (dbUnits && dbUnits.length > 0) {
             dbUnits.forEach(dbU => {
               const cleanSerial = String(dbU.serial_number || '').toUpperCase();
               map.set(cleanSerial, {
                 id: dbU.id,
                 part_id: dbU.part_id,
-                part_number: dbU.parts?.part_number || dbU.part_number || dbU.notes || 'PART',
-                description: dbU.parts?.description || dbU.description || dbU.notes || 'Service Replacement Part',
+                part_number: dbU.part_number || dbU.notes || 'PART',
+                description: dbU.description || dbU.notes || 'Service Replacement Part',
                 serial_number: dbU.serial_number,
                 current_site_id: dbU.current_site_id || 'site-dc',
-                site_code: dbU.sites?.code || 'DC-MDC',
+                site_code: dbU.site_code || 'DC-MDC',
                 po_id: dbU.po_id,
                 status: dbU.status || 'in_stock',
                 box_number: dbU.box_number || 1,
@@ -1542,13 +1547,42 @@ export function AppProvider({ children }) {
                 notes: dbU.notes
               });
             });
-            const merged = Array.from(map.values()).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
-            try {
-              localStorage.setItem('mdc_inventory', JSON.stringify(merged));
-            } catch (e) {}
-            return merged;
+          }
+
+          // 8b. Add units from all saved intake records in dc_intake_records (guarantees cross-account visibility)
+          const allIntakeSources = [...fetchedIntakes, ...(dcIntakeRecords || [])];
+          allIntakeSources.forEach(rec => {
+            if (Array.isArray(rec.items)) {
+              rec.items.forEach(it => {
+                const cleanSerial = String(it.serial_number || '').toUpperCase();
+                if (!map.has(cleanSerial)) {
+                  map.set(cleanSerial, {
+                    id: it.id || `unit-${cleanSerial}`,
+                    part_id: it.part_id || `part-${it.part_number}`,
+                    part_number: it.part_number,
+                    description: it.description || 'Service Replacement Part',
+                    serial_number: it.serial_number,
+                    current_site_id: 'site-dc',
+                    site_code: 'DC-MDC',
+                    po_id: it.po_id || rec.po_id || null,
+                    status: 'in_stock',
+                    box_number: 1,
+                    received_at: it.received_at || rec.intake_date || new Date().toISOString(),
+                    received_by: it.received_by || rec.saved_by_name || 'Warehouse Staff',
+                    intake_record_id: rec.id
+                  });
+                }
+              });
+            }
           });
-        }
+
+          const merged = Array.from(map.values()).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
+          try {
+            localStorage.setItem('mdc_inventory', JSON.stringify(merged));
+          } catch (e) {}
+          dbStorage.setItem('mdc_inventory', merged);
+          return merged;
+        });
       } catch (unitErr) {
         console.warn('inventory_units fetch note:', unitErr.message);
       }
@@ -3666,8 +3700,38 @@ export function AppProvider({ children }) {
       updated_at: new Date().toISOString()
     };
 
-    // 1. Update React Local State & localStorage immediately
+    // 1. Update React Local State & localStorage immediately for intake records and inventory units
     setDcIntakeRecords(prev => [newRecord, ...prev.filter(r => r.id !== finalId)]);
+    setInventoryUnits(prev => {
+      const map = new Map((prev || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
+      newRecord.items.forEach(u => {
+        const cleanSerial = String(u.serial_number || '').toUpperCase();
+        if (!map.has(cleanSerial)) {
+          map.set(cleanSerial, {
+            id: u.id || `unit-${cleanSerial}`,
+            part_id: `part-${u.part_number}`,
+            part_number: u.part_number,
+            description: u.description || 'Service Replacement Part',
+            serial_number: u.serial_number,
+            current_site_id: 'site-dc',
+            site_code: 'DC-MDC',
+            po_id: u.po_id || newRecord.po_id || null,
+            status: 'in_stock',
+            box_number: 1,
+            received_at: u.received_at || newRecord.intake_date || new Date().toISOString(),
+            received_by: u.received_by || newRecord.saved_by_name || 'Warehouse Staff',
+            intake_record_id: newRecord.id
+          });
+        }
+      });
+      const updated = Array.from(map.values());
+      try {
+        localStorage.setItem('mdc_inventory', JSON.stringify(updated));
+      } catch (e) {}
+      dbStorage.setItem('mdc_inventory', updated);
+      return updated;
+    });
+
     try {
       const existing = JSON.parse(localStorage.getItem('mdc_dc_intake_records') || '[]');
       const updated = [newRecord, ...existing.filter(r => r.id !== finalId)].slice(0, 100);
@@ -3676,7 +3740,7 @@ export function AppProvider({ children }) {
       console.warn('LocalStorage save error for intake records:', e);
     }
 
-    // 2. Cloud Backup to Supabase PostgreSQL dc_intake_records table
+    // 2. Cloud Backup to Supabase PostgreSQL dc_intake_records & inventory_units tables
     if (supabase) {
       (async () => {
         try {
@@ -3698,6 +3762,22 @@ export function AppProvider({ children }) {
           });
           if (error) {
             console.warn('Supabase dc_intake_records sync note (saved locally):', error.message);
+          }
+
+          // Also upsert individual units into inventory_units table for deep cross-account sync
+          const unitRows = newRecord.items.map(u => ({
+            serial_number: u.serial_number,
+            part_number: u.part_number,
+            description: u.description,
+            status: 'in_stock',
+            current_site_id: 'site-dc',
+            received_at: u.received_at || newRecord.intake_date,
+            received_by_name: u.received_by || newRecord.saved_by_name,
+            po_id: u.po_id || newRecord.po_id || null,
+            notes: `Intake Record ${newRecord.id}`
+          }));
+          if (unitRows.length > 0) {
+            await supabase.from('inventory_units').upsert(unitRows, { onConflict: 'serial_number' });
           }
         } catch (dbErr) {
           console.warn('Supabase dc_intake_records sync exception:', dbErr.message);
