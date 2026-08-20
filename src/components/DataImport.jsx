@@ -85,6 +85,10 @@ export default function DataImport() {
     setParsedData(null);
     setFileName('');
     setLastFileObj(null);
+    setTimeout(() => {
+      window.location.hash = '#allocation';
+      window.location.reload();
+    }, 250);
   };
 
   const handleDownloadTemplate = () => {

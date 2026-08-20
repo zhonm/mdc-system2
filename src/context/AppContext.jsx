@@ -1397,22 +1397,23 @@ export function AppProvider({ children }) {
   }, []);
 
   // --- DYNAMIC UPLOAD DATASET APPLIER ---
-  const applyParsedDataset = (parsedObj) => {
-    if (!parsedObj || !parsedObj.payload) {
+  const applyParsedDataset = async (dataset) => {
+    if (!dataset || !dataset.payload) {
       showToast('Invalid dataset: missing payload', 'error');
       return;
     }
 
-    const { type, payload, sheetName } = parsedObj;
-
     try {
-      dbStorage.removeItem('mdc_is_cleared');
-      try { localStorage.removeItem('mdc_is_cleared'); } catch (e) {}
+      const { type, payload, sheetName } = dataset;
+      try {
+        localStorage.removeItem('mdc_is_cleared');
+      } catch (e) {}
 
       if (type === 'WORKBOOK_BUNDLE') {
         if (payload.sites && payload.sites.length > 0) {
           setSites(payload.sites);
           dbStorage.setItem('mdc_sites', payload.sites);
+          try { localStorage.setItem('mdc_sites', JSON.stringify(payload.sites)); } catch (e) {}
         }
         if (payload.parts && payload.parts.length > 0) {
           setParts(prev => {
@@ -1424,16 +1425,19 @@ export function AppProvider({ children }) {
             });
             const merged = Array.from(map.values());
             dbStorage.setItem('mdc_parts', merged);
+            try { localStorage.setItem('mdc_parts', JSON.stringify(merged)); } catch (e) {}
             return merged;
           });
         }
         if (payload.forecastItems && payload.forecastItems.length > 0) {
           setForecastItems(payload.forecastItems);
           dbStorage.setItem('mdc_forecast', payload.forecastItems);
+          try { localStorage.setItem('mdc_forecast', JSON.stringify(payload.forecastItems)); } catch (e) {}
         }
         if (payload.allocations && payload.allocations.length > 0) {
           setAllocations(payload.allocations);
           dbStorage.setItem('mdc_allocations', payload.allocations);
+          try { localStorage.setItem('mdc_allocations', JSON.stringify(payload.allocations)); } catch (e) {}
         }
         showToast(`Applied ${payload.forecastItems?.length || 0} forecasts and ${payload.allocations?.length || 0} allocations matching your workbook 100%!`, 'success');
         setActiveTab('forecast');
@@ -1511,6 +1515,7 @@ export function AppProvider({ children }) {
         if (payload.sites && payload.sites.length > 0) {
           setSites(payload.sites);
           dbStorage.setItem('mdc_sites', payload.sites);
+          try { localStorage.setItem('mdc_sites', JSON.stringify(payload.sites)); } catch (e) {}
         }
         if (payload.parts && payload.parts.length > 0) {
           setParts(prev => {
@@ -1522,6 +1527,7 @@ export function AppProvider({ children }) {
             });
             const merged = Array.from(map.values());
             dbStorage.setItem('mdc_parts', merged);
+            try { localStorage.setItem('mdc_parts', JSON.stringify(merged)); } catch (e) {}
             return merged;
           });
         }
@@ -1535,10 +1541,12 @@ export function AppProvider({ children }) {
         if (payload.forecastItems && payload.forecastItems.length > 0) {
           setForecastItems(payload.forecastItems);
           dbStorage.setItem('mdc_forecast', payload.forecastItems);
+          try { localStorage.setItem('mdc_forecast', JSON.stringify(payload.forecastItems)); } catch (e) {}
         }
         if (payload.allocations && payload.allocations.length > 0) {
           setAllocations(payload.allocations);
           dbStorage.setItem('mdc_allocations', payload.allocations);
+          try { localStorage.setItem('mdc_allocations', JSON.stringify(payload.allocations)); } catch (e) {}
         }
         showToast(`Applied Forecasting & Master Allocation for ${payload.forecastItems?.length || 0} iPhone parts across all sites!`, 'success');
         setActiveTab('allocation');
