@@ -21,11 +21,13 @@ import {
   RefreshCw,
   Filter,
   Smartphone,
-  Calendar
+  Calendar,
+  ShieldAlert,
+  Lock
 } from 'lucide-react';
 
 export default function DataImport() {
-  const { applyParsedDataset, resetToDefaultData, clearAllData, sites, parts, showToast } = useApp();
+  const { applyParsedDataset, resetToDefaultData, clearAllData, sites, parts, currentUser, showToast } = useApp();
   const [isProcessing, setIsProcessing] = useState(false);
   const [parsedData, setParsedData] = useState(null);
   const [fileName, setFileName] = useState('');
@@ -34,7 +36,14 @@ export default function DataImport() {
   const [selectedMonth, setSelectedMonth] = useState('7'); // Default to August (Month index 7) or 'auto'
   const [previewTab, setPreviewTab] = useState('forecast'); // 'forecast' | 'allocation' | 'raw'
 
+  const isSuperAdmin = currentUser?.role === 'superadmin';
+
   const handleFileUpload = async (e) => {
+    if (!isSuperAdmin) {
+      showToast('Access restricted: Only Superadmin can upload forecasting and allocation data.', 'error');
+      return;
+    }
+
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -79,9 +88,39 @@ export default function DataImport() {
     }
   };
 
-  const handleConfirmImport = () => {
+  const handleConfirmImport = async () => {
     if (!parsedData) return;
-    applyParsedDataset(parsedData);
+    if (!isSuperAdmin) {
+      showToast('Action restricted: Only Superadmin is authorized to apply datasets.', 'error');
+      return;
+    }
+
+    const totalAllocUnits = parsedData.payload?.allocations?.reduce((s, a) => s + (a.total_allocated_qty || 0), 0) || parsedData.summary?.totalForecastedUnits || 0;
+    const totalCost = parsedData.payload?.allocations?.reduce((s, a) => s + (a.total_stock_cost || 0), 0) || 0;
+    const partsCount = parsedData.payload?.allocations?.length || parsedData.summary?.partsCount || 0;
+    const sitesCount = parsedData.payload?.sites?.length || parsedData.summary?.sitesCount || 26;
+
+    const auditMeta = {
+      id: `log-import-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      action_type: 'FILE_IMPORT_APPLIED',
+      file_name: fileName || lastFileObj?.name || 'Uploaded Dataset.xlsx',
+      file_type: parsedData.type,
+      target_month: selectedMonth === '7' ? 'August 2026' : (selectedMonth === 'auto' ? 'Auto Period' : `Month ${selectedMonth}`),
+      filter_scope: filterScope,
+      total_forecast_units: parsedData.summary?.totalForecastedUnits || totalAllocUnits,
+      total_allocated_units: totalAllocUnits,
+      total_master_cost: totalCost,
+      parts_count: partsCount,
+      sites_count: sitesCount,
+      user_id: currentUser?.id || 'usr-superadmin',
+      user_name: currentUser?.fullName || 'Superadmin User',
+      user_email: currentUser?.email || 'superadmin@mobilecare.com',
+      user_role: currentUser?.role || 'superadmin',
+      status: 'VERIFIED_APPLIED'
+    };
+
+    await applyParsedDataset(parsedData, auditMeta);
     setParsedData(null);
     setFileName('');
     setLastFileObj(null);
@@ -141,6 +180,32 @@ export default function DataImport() {
           </div>
         </div>
 
+        {/* Superadmin Upload Permission Notice */}
+        {!isSuperAdmin && (
+          <div
+            style={{
+              background: '#fffbeb',
+              border: '1px solid #fde68a',
+              borderRadius: 'var(--radius-sm)',
+              padding: '14px 18px',
+              marginTop: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px'
+            }}
+          >
+            <ShieldAlert size={22} color="#d97706" style={{ flexShrink: 0 }} />
+            <div>
+              <strong style={{ color: '#92400e', fontSize: '13.5px' }}>
+                Upload Restricted: Super Admin Only
+              </strong>
+              <p style={{ color: '#b45309', fontSize: '12px', margin: '2px 0 0' }}>
+                Only users with the <strong>Superadmin</strong> role are authorized to ingest and apply Forecasting and Master Allocation datasets to the Distribution Center.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Configuration Bar: Target Month & Part Scope */}
         <div
           style={{
@@ -167,6 +232,7 @@ export default function DataImport() {
               className="form-select"
               value={selectedMonth}
               onChange={(e) => handleMonthChange(e.target.value)}
+              disabled={!isSuperAdmin}
               style={{ width: '100%', fontSize: '13px', padding: '7px 10px', background: '#fff' }}
             >
               <option value="auto">Auto-Detect from Dates in File</option>
@@ -198,6 +264,7 @@ export default function DataImport() {
                 type="button"
                 className={`btn btn-sm ${filterScope === 'IPHONE_13_PLUS_BATTERY_DISPLAY' ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => handleScopeChange('IPHONE_13_PLUS_BATTERY_DISPLAY')}
+                disabled={!isSuperAdmin}
                 style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
               >
                 iPhone 13+ (Battery & Display)
@@ -206,6 +273,7 @@ export default function DataImport() {
                 type="button"
                 className={`btn btn-sm ${filterScope === 'ALL_PARTS' ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => handleScopeChange('ALL_PARTS')}
+                disabled={!isSuperAdmin}
                 style={{ fontSize: '12px', flex: 1, padding: '7px 10px', whiteSpace: 'nowrap' }}
               >
                 All Parts (Unfiltered)
@@ -217,53 +285,60 @@ export default function DataImport() {
         {/* Universal Dropzone */}
         <div
           style={{
-            border: '2px dashed var(--primary)',
+            border: isSuperAdmin ? '2px dashed var(--primary)' : '2px dashed #cbd5e1',
             borderRadius: 'var(--radius-md)',
             padding: '40px 20px',
             textAlign: 'center',
-            background: 'var(--bg-primary)',
-            cursor: 'pointer',
+            background: isSuperAdmin ? 'var(--bg-primary)' : '#f8fafc',
+            cursor: isSuperAdmin ? 'pointer' : 'not-allowed',
             position: 'relative',
             marginTop: '16px',
-            transition: 'all 0.2s ease'
+            transition: 'all 0.2s ease',
+            opacity: isSuperAdmin ? 1 : 0.75
           }}
         >
-          <input
-            type="file"
-            accept=".xlsx, .xls, .csv"
-            onChange={handleFileUpload}
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              height: '100%',
-              opacity: 0,
-              cursor: 'pointer'
-            }}
-          />
+          {isSuperAdmin && (
+            <input
+              type="file"
+              accept=".xlsx, .xls, .csv"
+              onChange={handleFileUpload}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                opacity: 0,
+                cursor: 'pointer'
+              }}
+            />
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
             <div
               style={{
                 width: '56px',
                 height: '56px',
                 borderRadius: '50%',
-                background: 'var(--primary-light)',
+                background: isSuperAdmin ? 'var(--primary-light)' : '#f1f5f9',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: 'var(--primary)',
-                boxShadow: '0 4px 12px rgba(2, 132, 199, 0.2)'
+                color: isSuperAdmin ? 'var(--primary)' : '#94a3b8',
+                boxShadow: isSuperAdmin ? '0 4px 12px rgba(2, 132, 199, 0.2)' : 'none'
               }}
             >
-              {isProcessing ? <RefreshCw className="animate-spin" size={26} /> : <UploadCloud size={26} />}
+              {!isSuperAdmin ? <Lock size={24} /> : isProcessing ? <RefreshCw className="animate-spin" size={26} /> : <UploadCloud size={26} />}
             </div>
             <div>
-              <strong style={{ fontSize: '16px', color: 'var(--text-main)' }}>
-                {fileName ? fileName : 'Drag and drop your Fixably/GSX CSV or Excel file here or click to browse'}
+              <strong style={{ fontSize: '16px', color: isSuperAdmin ? 'var(--text-main)' : 'var(--text-muted)' }}>
+                {!isSuperAdmin
+                  ? 'Upload Disabled — Super Admin Permission Required'
+                  : fileName ? fileName : 'Drag and drop your Fixably/GSX CSV or Excel file here or click to browse'}
               </strong>
               <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Accepts <strong>.CSV</strong> and <strong>.XLSX</strong> • Target: <strong>iPhone 13, 14, 15, 16, 17 Battery & Display</strong>
+                {!isSuperAdmin
+                  ? 'Please log in with a Superadmin account to upload new forecast and allocation masterlists.'
+                  : <>Accepts <strong>.CSV</strong> and <strong>.XLSX</strong> • Target: <strong>iPhone 13, 14, 15, 16, 17 Battery & Display</strong></>}
               </p>
             </div>
           </div>
@@ -302,7 +377,8 @@ export default function DataImport() {
             <button
               className="btn btn-primary btn-lg"
               onClick={handleConfirmImport}
-              style={{ boxShadow: 'var(--shadow-md)', minWidth: '220px' }}
+              disabled={!isSuperAdmin}
+              style={{ boxShadow: 'var(--shadow-md)', minWidth: '220px', cursor: isSuperAdmin ? 'pointer' : 'not-allowed' }}
             >
               <span>Apply & Update Live System</span>
               <ArrowRight size={18} />

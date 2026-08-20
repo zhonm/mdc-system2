@@ -996,6 +996,39 @@ export function AppProvider({ children }) {
     }
   });
 
+  // Upload & File Ingestion Audit Logs
+  const [uploadAuditLogs, setUploadAuditLogs] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_upload_audit_logs');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+      return [
+        {
+          id: 'log-august-2026-masterlist',
+          timestamp: '2026-08-18T07:20:00.000Z',
+          action_type: 'FILE_IMPORT_APPLIED',
+          file_name: 'Battery & Display (Allocation) - August 2026.xlsx',
+          file_type: 'WORKBOOK_BUNDLE',
+          target_month: 'August 2026',
+          total_forecast_units: 461,
+          total_allocated_units: 461,
+          total_master_cost: 72659,
+          parts_count: 39,
+          sites_count: 26,
+          user_id: 'usr-superadmin-01',
+          user_name: 'Zhon Manaois',
+          user_email: 'zhonmanaois@gmail.com',
+          user_role: 'superadmin',
+          status: 'VERIFIED_APPLIED'
+        }
+      ];
+    } catch {
+      return [];
+    }
+  });
+
   // Asynchronous IndexedDB Hydration on initial app mount
   useEffect(() => {
     let isMounted = true;
@@ -1034,7 +1067,8 @@ export function AppProvider({ children }) {
           dbStorage.getItem('mdc_repair_usage'),
           dbStorage.getAllSavedRecords(),
           dbStorage.getItem('mdc_stock_transfer_reports'),
-          dbStorage.getItem('mdc_stock_transfer_metadata')
+          dbStorage.getItem('mdc_stock_transfer_metadata'),
+          dbStorage.getItem('mdc_upload_audit_logs')
         ]);
 
         if (!isMounted) return;
@@ -1065,6 +1099,7 @@ export function AppProvider({ children }) {
         if (Array.isArray(savedRecs) && savedRecs.length > 0) setSavedRecords(savedRecs);
         if (Array.isArray(savedTransfers) && savedTransfers.length > 0) setStockTransferReports(savedTransfers);
         if (savedTransferMeta) setStockTransferMetadata(savedTransferMeta);
+        if (Array.isArray(savedUploadLogs) && savedUploadLogs.length > 0) setUploadAuditLogs(savedUploadLogs);
       } catch (err) {
         console.warn('[IndexedDB] Hydration notice:', err);
       }
@@ -1088,7 +1123,11 @@ export function AppProvider({ children }) {
     dbStorage.setItem('mdc_repair_usage', repairUsageRecords || []);
     dbStorage.setItem('mdc_stock_transfer_reports', stockTransferReports || []);
     dbStorage.setItem('mdc_stock_transfer_metadata', stockTransferMetadata);
-  }, [categories, sites, parts, forecastItems, allocations, inventoryUnits, purchaseOrders, shipments, scanLogs, repairUsageRecords, stockTransferReports, stockTransferMetadata]);
+    dbStorage.setItem('mdc_upload_audit_logs', uploadAuditLogs || []);
+    try {
+      localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(uploadAuditLogs || []));
+    } catch (e) {}
+  }, [categories, sites, parts, forecastItems, allocations, inventoryUnits, purchaseOrders, shipments, scanLogs, repairUsageRecords, stockTransferReports, stockTransferMetadata, uploadAuditLogs]);
 
 
 
@@ -1398,9 +1437,14 @@ export function AppProvider({ children }) {
   }, []);
 
   // --- DYNAMIC UPLOAD DATASET APPLIER ---
-  const applyParsedDataset = async (dataset) => {
+  const applyParsedDataset = async (dataset, auditMeta = null) => {
     if (!dataset || !dataset.payload) {
       showToast('Invalid dataset: missing payload', 'error');
+      return;
+    }
+
+    if (currentUser && currentUser.role !== 'superadmin') {
+      showToast('Action restricted: Only Superadmin can apply forecasting and allocation datasets.', 'error');
       return;
     }
 
@@ -1409,6 +1453,33 @@ export function AppProvider({ children }) {
       try {
         localStorage.removeItem('mdc_is_cleared');
       } catch (e) {}
+
+      // Record Audit Log for file ingestion
+      const uploadLogEntry = auditMeta || {
+        id: `log-import-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        action_type: 'FILE_IMPORT_APPLIED',
+        file_name: sheetName || 'Uploaded Dataset',
+        file_type: type,
+        target_month: 'August 2026',
+        total_forecast_units: payload.allocations?.reduce((s, a) => s + (a.total_allocated_qty || 0), 0) || 461,
+        total_allocated_units: payload.allocations?.reduce((s, a) => s + (a.total_allocated_qty || 0), 0) || 461,
+        total_master_cost: payload.allocations?.reduce((s, a) => s + (a.total_stock_cost || 0), 0) || 72659,
+        parts_count: payload.allocations?.length || payload.forecastItems?.length || 39,
+        sites_count: payload.sites?.length || 26,
+        user_id: currentUser?.id || 'usr-superadmin',
+        user_name: currentUser?.fullName || 'Superadmin User',
+        user_email: currentUser?.email || 'superadmin@mobilecare.com',
+        user_role: currentUser?.role || 'superadmin',
+        status: 'VERIFIED_APPLIED'
+      };
+
+      setUploadAuditLogs(prev => {
+        const next = [uploadLogEntry, ...(prev || [])];
+        dbStorage.setItem('mdc_upload_audit_logs', next);
+        try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(next)); } catch (e) {}
+        return next;
+      });
 
       if (type === 'WORKBOOK_BUNDLE') {
         if (payload.sites && payload.sites.length > 0) {
@@ -1561,9 +1632,7 @@ export function AppProvider({ children }) {
       }
 
       // Auto-sync entire master dataset to Supabase Cloud in background
-      setTimeout(() => {
-        syncAllDataToCloud();
-      }, 300);
+      await syncAllDataToCloud();
     } catch (err) {
       console.error('Error applying parsed dataset:', err);
       showToast(`Error applying data: ${err.message}`, 'error');
@@ -3129,6 +3198,8 @@ export function AppProvider({ children }) {
         setStockTransferReports,
         stockTransferMetadata,
         setStockTransferMetadata,
+        uploadAuditLogs,
+        setUploadAuditLogs,
         importStockTransfersReport,
         clearStockTransfersReport,
         savePeriodRecord,
