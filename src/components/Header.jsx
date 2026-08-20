@@ -11,7 +11,7 @@ export default function Header() {
     categories,
     searchQuery,
     setSearchQuery,
-    syncAllDataToCloud,
+    cloudSyncStatus,
     refreshDataFromCloud,
     showToast,
     activePeriod
@@ -40,6 +40,7 @@ export default function Header() {
     records: 'Saved Period Records & Historical Archives',
     orders: 'Purchase Order Tracking',
     'scan-in': 'Receive Scan-In (Physical Barcode Scanner)',
+    'intake-records': 'DC Intake Records & Verification',
     allocation: 'Master Allocation Matrix & Weekly Batches',
     'scan-out': 'Pack Scan-Out & Packing List Generator',
     shipments: 'Shipment Manifests & Proof of Delivery',
@@ -82,6 +83,38 @@ export default function Header() {
       </div>
 
       <div className="header-right">
+        {/* Google Sheets-style Live Cloud Auto-Save Indicator */}
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            background: cloudSyncStatus?.isSaving ? 'rgba(56, 189, 248, 0.12)' : 'rgba(16, 185, 129, 0.1)',
+            border: `1px solid ${cloudSyncStatus?.isSaving ? '#38bdf8' : 'rgba(16, 185, 129, 0.3)'}`,
+            borderRadius: 'var(--radius-full)',
+            padding: '5px 12px',
+            fontSize: '12px',
+            color: cloudSyncStatus?.isSaving ? '#0284c7' : '#059669',
+            fontWeight: 600,
+            cursor: 'default',
+            whiteSpace: 'nowrap',
+            flexShrink: 0
+          }}
+          title={cloudSyncStatus?.isSaving ? "Saving changes directly to Supabase Cloud Database..." : "All changes are automatically saved to Supabase Cloud Database"}
+        >
+          {cloudSyncStatus?.isSaving ? (
+            <>
+              <RefreshCw size={13} className="spin" color="#0284c7" />
+              <span>Saving...</span>
+            </>
+          ) : (
+            <>
+              <CheckCircle2 size={13} color="#10b981" />
+              <span>Cloud Synced</span>
+            </>
+          )}
+        </div>
+
         <div className="search-input-box">
           <Search size={15} />
           <input
@@ -97,7 +130,7 @@ export default function Header() {
           className="btn btn-secondary btn-sm"
           onClick={handleManualSync}
           disabled={isSyncing}
-          title="Synchronize all local data to Supabase Cloud Database"
+          title="Synchronize and refresh all latest live data from Supabase Cloud Database"
           style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.3)' }}
         >
           {isSyncing ? <RefreshCw size={14} className="spin" /> : <Database size={14} />}

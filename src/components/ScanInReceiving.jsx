@@ -16,10 +16,11 @@ import {
   Layers,
   Sparkles,
   Search,
-  Database,
   Check,
   BookmarkPlus,
-  Building2
+  Building2,
+  Database,
+  Trash2
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
 import SaveIntakeRecordModal from './SaveIntakeRecordModal';
@@ -27,12 +28,14 @@ import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 export default function ScanInReceiving() {
   const {
     addScanInUnit,
+    deleteScanInUnit,
     batchAddScanInUnits,
     purchaseOrders,
     parts,
     inventoryUnits,
     setInventoryUnits,
     setActiveTab,
+    cloudSyncStatus,
     showToast
   } = useApp();
 
@@ -41,6 +44,7 @@ export default function ScanInReceiving() {
   const [serialInput, setSerialInput] = useState('');
   const [scanResult, setScanResult] = useState(null); // { type: 'success' | 'error', message: '' }
   const [isSaveIntakeModalOpen, setIsSaveIntakeModalOpen] = useState(false);
+  const [unitToDelete, setUnitToDelete] = useState(null);
 
   // Auto-Receive Feature State with localStorage persistence
   const [autoReceive, setAutoReceive] = useState(() => {
@@ -454,6 +458,14 @@ export default function ScanInReceiving() {
     showToast('Cleared session view history (Stock inventory remains intact in Database)', 'info');
   };
 
+  const handleConfirmDeletePart = async () => {
+    if (!unitToDelete) return;
+    const serial = unitToDelete.serial_number;
+    await deleteScanInUnit(serial);
+    setSessionScans(prev => prev.filter(u => String(u.serial_number).toUpperCase() !== String(serial).toUpperCase()));
+    setUnitToDelete(null);
+  };
+
   return (
     <div className="scanner-container">
       {/* Scanner Workstation Hero Card */}
@@ -472,6 +484,27 @@ export default function ScanInReceiving() {
 
           {/* System Telemetry Badges (Read-Only Information Badges) */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <div
+              className="telemetry-badge"
+              style={{
+                background: cloudSyncStatus?.isSaving ? 'rgba(56, 189, 248, 0.15)' : 'rgba(16, 185, 129, 0.12)',
+                borderColor: cloudSyncStatus?.isSaving ? '#38bdf8' : 'rgba(16, 185, 129, 0.4)'
+              }}
+              title="Real-time Direct Database Sync (Auto-Save on every scan)"
+            >
+              {cloudSyncStatus?.isSaving ? (
+                <>
+                  <RefreshCw size={13} className="spin" color="#38bdf8" />
+                  <span style={{ color: '#38bdf8', fontWeight: 600 }}>Saving to Cloud DB...</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 size={13} color="#34d399" />
+                  <span style={{ color: '#34d399', fontWeight: 600 }}>Cloud Auto-Save: Active</span>
+                </>
+              )}
+            </div>
+
             <div className="telemetry-badge" title="Total active parts in DC stock inventory">
               <Database size={14} color="#38bdf8" />
               <span>DC Stock: <strong>{availableInStockUnits.length} units</strong></span>
@@ -755,6 +788,7 @@ export default function ScanInReceiving() {
                   <th>Intake Source</th>
                   <th>Timestamp</th>
                   <th>Status</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -782,6 +816,27 @@ export default function ScanInReceiving() {
                     </td>
                     <td>
                       <span className="badge badge-success">In Stock</span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => setUnitToDelete(unit)}
+                        style={{
+                          padding: '4px 8px',
+                          fontSize: '11.5px',
+                          color: '#ef4444',
+                          borderColor: '#fca5a5',
+                          background: '#fff',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}
+                        title={`Delete part #${unit.part_number} (${unit.serial_number}) if details are incorrect`}
+                      >
+                        <Trash2 size={13} />
+                        <span>Delete</span>
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -1075,6 +1130,49 @@ export default function ScanInReceiving() {
           setActiveTab('intake-records');
         }}
       />
+
+      {/* Delete Unit Confirmation Modal */}
+      {unitToDelete && (
+        <div className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setUnitToDelete(null); }}>
+          <div className="modal-content" style={{ maxWidth: '460px' }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <AlertCircle size={20} color="#ef4444" />
+                <h3 style={{ color: '#fff', fontSize: '17px', margin: 0 }}>Delete Part from Inventory?</h3>
+              </div>
+              <button
+                onClick={() => setUnitToDelete(null)}
+                style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: '13.5px', color: 'var(--text-main)', margin: '0 0 12px 0' }}>
+                Are you sure you want to remove this received part from DC inventory and database?
+              </p>
+
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 'var(--radius-md)', padding: '12px 14px', fontSize: '12.5px', marginBottom: '12px' }}>
+                <div style={{ marginBottom: '6px' }}><strong>Part Number:</strong> <span className="font-mono">{unitToDelete.part_number}</span></div>
+                <div style={{ marginBottom: '6px' }}><strong>Description:</strong> {unitToDelete.description}</div>
+                <div style={{ marginBottom: '6px' }}><strong>Serial Number:</strong> <span className="font-mono" style={{ color: '#0284c7' }}>{unitToDelete.serial_number}</span></div>
+                <div><strong>Scanned At:</strong> {unitToDelete.received_at ? new Date(unitToDelete.received_at).toLocaleString() : 'Recent'}</div>
+              </div>
+
+              <p style={{ fontSize: '12px', color: '#ef4444', margin: 0 }}>
+                This will permanently delete the unit from DC in-stock inventory and database records.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => setUnitToDelete(null)}>Cancel</button>
+              <button className="btn btn-danger" onClick={handleConfirmDeletePart} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Trash2 size={15} />
+                <span>Delete Part</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
