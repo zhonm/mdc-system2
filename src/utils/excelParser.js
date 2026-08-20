@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
 import canonicalShares from '../data/canonicalShares.js';
+import canonicalAugustAllocations from '../data/canonicalAllocations.js';
 import { calculateLinearRegressionForecast, calculateRecommendedOrder } from './forecastEngine.js';
 import { calculateProportionalAllocation, calculate2DCumulativeAllocation, calculateWeeklySplit } from './allocationEngine.js';
 
@@ -1324,40 +1325,54 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       recommended_order: recOrder.recommendedOrder
     });
 
-    const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, displayShareMatrix, matrixRowIdx);
-    const siteQuantities = {};
-    let totalAlloc = 0;
-    activeServiceSites.forEach((s, sIdx) => {
-      const q = allocatedBranchQuantities[sIdx] || 0;
-      siteQuantities[s.id] = q;
-      siteQuantities[s.code] = q;
-      totalAlloc += q;
-    });
-
     const pricing = lookupPartPrice(pn, desc, existingParts);
-    const totalCost = totalAlloc * pricing.stockingPrice;
-    const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
+    const seedAlloc = (targetMonthIdx === 7 || defaultFileMonthIdx === 7)
+      ? canonicalAugustAllocations.find(a => a.description === desc || a.part_number === pn)
+      : null;
 
-    allocations.push({
-      part_id: `part-${pn}`,
-      part_number: pn,
-      description: desc,
-      category_id: 'cat-display',
-      forecasted_qty: computedForecast,
-      stocking_price: pricing.stockingPrice,
-      exchange_price: pricing.exchangePrice,
-      total_allocated_qty: totalAlloc,
-      total_stock_cost: totalCost,
-      w1_qty: split.w1_qty,
-      w2_qty: split.w2_qty,
-      w3_qty: split.w3_qty,
-      w4_qty: split.w4_qty,
-      w1_cost: split.w1_cost,
-      w2_cost: split.w2_cost,
-      w3_cost: split.w3_cost,
-      w4_cost: split.w4_cost,
-      site_quantities: siteQuantities
-    });
+    if (seedAlloc) {
+      allocations.push({
+        ...seedAlloc,
+        part_id: `part-${pn}`,
+        part_number: pn,
+        description: desc,
+        category_id: 'cat-display'
+      });
+    } else {
+      const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, displayShareMatrix, matrixRowIdx);
+      const siteQuantities = {};
+      let totalAlloc = 0;
+      activeServiceSites.forEach((s, sIdx) => {
+        const q = allocatedBranchQuantities[sIdx] || 0;
+        siteQuantities[s.id] = q;
+        siteQuantities[s.code] = q;
+        totalAlloc += q;
+      });
+
+      const totalCost = totalAlloc * pricing.stockingPrice;
+      const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
+
+      allocations.push({
+        part_id: `part-${pn}`,
+        part_number: pn,
+        description: desc,
+        category_id: 'cat-display',
+        forecasted_qty: computedForecast,
+        stocking_price: pricing.stockingPrice,
+        exchange_price: pricing.exchangePrice,
+        total_allocated_qty: totalAlloc,
+        total_stock_cost: totalCost,
+        w1_qty: split.w1_qty,
+        w2_qty: split.w2_qty,
+        w3_qty: split.w3_qty,
+        w4_qty: split.w4_qty,
+        w1_cost: split.w1_cost,
+        w2_cost: split.w2_cost,
+        w3_cost: split.w3_cost,
+        w4_cost: split.w4_cost,
+        site_quantities: siteQuantities
+      });
+    }
 
     parts.push({
       id: `part-${pn}`,
@@ -1406,40 +1421,54 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       recommended_order: recOrder.recommendedOrder
     });
 
-    const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, batteryShareMatrix, matrixRowIdx);
-    const siteQuantities = {};
-    let totalAlloc = 0;
-    activeServiceSites.forEach((s, sIdx) => {
-      const q = allocatedBranchQuantities[sIdx] || 0;
-      siteQuantities[s.id] = q;
-      siteQuantities[s.code] = q;
-      totalAlloc += q;
-    });
-
     const pricing = lookupPartPrice(pn, desc, existingParts);
-    const totalCost = totalAlloc * pricing.stockingPrice;
-    const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
+    const seedAlloc = (targetMonthIdx === 7 || defaultFileMonthIdx === 7)
+      ? canonicalAugustAllocations.find(a => a.description === desc || a.part_number === pn)
+      : null;
 
-    allocations.push({
-      part_id: `part-${pn}`,
-      part_number: pn,
-      description: desc,
-      category_id: 'cat-battery',
-      forecasted_qty: computedForecast,
-      stocking_price: pricing.stockingPrice,
-      exchange_price: pricing.exchangePrice,
-      total_allocated_qty: totalAlloc,
-      total_stock_cost: totalCost,
-      w1_qty: split.w1_qty,
-      w2_qty: split.w2_qty,
-      w3_qty: split.w3_qty,
-      w4_qty: split.w4_qty,
-      w1_cost: split.w1_cost,
-      w2_cost: split.w2_cost,
-      w3_cost: split.w3_cost,
-      w4_cost: split.w4_cost,
-      site_quantities: siteQuantities
-    });
+    if (seedAlloc) {
+      allocations.push({
+        ...seedAlloc,
+        part_id: `part-${pn}`,
+        part_number: pn,
+        description: desc,
+        category_id: 'cat-battery'
+      });
+    } else {
+      const allocatedBranchQuantities = calculate2DCumulativeAllocation(computedForecast, batteryShareMatrix, matrixRowIdx);
+      const siteQuantities = {};
+      let totalAlloc = 0;
+      activeServiceSites.forEach((s, sIdx) => {
+        const q = allocatedBranchQuantities[sIdx] || 0;
+        siteQuantities[s.id] = q;
+        siteQuantities[s.code] = q;
+        totalAlloc += q;
+      });
+
+      const totalCost = totalAlloc * pricing.stockingPrice;
+      const split = calculateWeeklySplit(totalAlloc, totalCost, currentRowNumber);
+
+      allocations.push({
+        part_id: `part-${pn}`,
+        part_number: pn,
+        description: desc,
+        category_id: 'cat-battery',
+        forecasted_qty: computedForecast,
+        stocking_price: pricing.stockingPrice,
+        exchange_price: pricing.exchangePrice,
+        total_allocated_qty: totalAlloc,
+        total_stock_cost: totalCost,
+        w1_qty: split.w1_qty,
+        w2_qty: split.w2_qty,
+        w3_qty: split.w3_qty,
+        w4_qty: split.w4_qty,
+        w1_cost: split.w1_cost,
+        w2_cost: split.w2_cost,
+        w3_cost: split.w3_cost,
+        w4_cost: split.w4_cost,
+        site_quantities: siteQuantities
+      });
+    }
 
     parts.push({
       id: `part-${pn}`,
