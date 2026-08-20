@@ -1346,6 +1346,11 @@ export function AppProvider({ children }) {
         const liveMaster = dbRecords.find(r => r.id === LIVE_MASTER_RECORD_ID);
         if (liveMaster?.snapshot_data) {
           const snap = liveMaster.snapshot_data;
+          try {
+            localStorage.removeItem('mdc_is_cleared');
+            dbStorage.removeItem('mdc_is_cleared');
+          } catch (e) {}
+
           if (Array.isArray(snap.forecastItems) && snap.forecastItems.length > 0) {
             setForecastItems(snap.forecastItems);
             dbStorage.setItem('mdc_forecast', snap.forecastItems);
@@ -1357,14 +1362,9 @@ export function AppProvider({ children }) {
             try { localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations)); } catch (e) {}
           }
           if (Array.isArray(snap.uploadAuditLogs) && snap.uploadAuditLogs.length > 0) {
-            setUploadAuditLogs(prev => {
-              const map = new Map((prev || []).map(l => [l.id, l]));
-              snap.uploadAuditLogs.forEach(l => map.set(l.id, l));
-              const merged = Array.from(map.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-              dbStorage.setItem('mdc_upload_audit_logs', merged);
-              try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(merged)); } catch (e) {}
-              return merged;
-            });
+            setUploadAuditLogs(snap.uploadAuditLogs);
+            dbStorage.setItem('mdc_upload_audit_logs', snap.uploadAuditLogs);
+            try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(snap.uploadAuditLogs)); } catch (e) {}
           }
           if (Array.isArray(snap.parts) && snap.parts.length > 0) {
             setParts(prev => {
@@ -1423,8 +1423,13 @@ export function AppProvider({ children }) {
   };
 
   const refreshDataFromCloud = async () => {
+    try {
+      localStorage.removeItem('mdc_is_cleared');
+      dbStorage.removeItem('mdc_is_cleared');
+    } catch (e) {}
+
     await hydrateFromSupabase();
-    showToast('Fetched latest live data from Supabase!', 'success');
+    showToast('Successfully synced latest live data from cloud database!', 'success');
   };
 
   // Initial Supabase Hydration check and Realtime Sync on app mount

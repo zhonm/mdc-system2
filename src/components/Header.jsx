@@ -21,8 +21,12 @@ export default function Header() {
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
-      if (refreshDataFromCloud) await refreshDataFromCloud();
-      if (syncAllDataToCloud) await syncAllDataToCloud();
+      if (refreshDataFromCloud) {
+        await refreshDataFromCloud();
+      }
+    } catch (err) {
+      console.error('Manual sync error:', err);
+      showToast('Error syncing with cloud database', 'error');
     } finally {
       setTimeout(() => setIsSyncing(false), 800);
     }
