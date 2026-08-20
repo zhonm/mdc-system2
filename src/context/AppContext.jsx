@@ -19,6 +19,7 @@ export const ALL_PAGES = [
   { id: 'records', label: 'Saved Period Records', section: 'Planning' },
   { id: 'orders', label: 'Purchase Orders', section: 'Planning' },
   { id: 'scan-in', label: 'Receive Scan-In', section: 'Warehouse Operations' },
+  { id: 'intake-records', label: 'DC Intake Records', section: 'Warehouse Operations' },
   { id: 'allocation', label: 'Allocation Matrix', section: 'Warehouse Operations' },
   { id: 'scan-out', label: 'Pack Scan-Out', section: 'Warehouse Operations' },
   { id: 'shipments', label: 'Shipments & Packing Lists', section: 'Distribution' },
@@ -30,11 +31,11 @@ export const ALL_PAGES = [
 
 // Sensible default page permissions per role
 export const ROLE_PRESETS = {
-  superadmin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'allocation', 'scan-out', 'shipments', 'reports', 'audit', 'settings', 'user-access'],
-  admin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'allocation', 'shipments', 'reports', 'audit', 'settings'],
-  warehouse_staff: ['dashboard', 'scan-in', 'allocation', 'scan-out', 'shipments', 'reports'],
+  superadmin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'audit', 'settings', 'user-access'],
+  admin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'intake-records', 'allocation', 'shipments', 'reports', 'audit', 'settings'],
+  warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports'],
   site_staff: ['dashboard', 'shipments', 'reports'],
-  management_viewer: ['dashboard', 'forecast', 'records', 'allocation', 'shipments', 'reports', 'audit']
+  management_viewer: ['dashboard', 'forecast', 'records', 'intake-records', 'allocation', 'shipments', 'reports', 'audit']
 };
 
 // Initial provisioned users (Only Zhon Manaois and Joshua Juvida)
@@ -965,6 +966,23 @@ export function AppProvider({ children }) {
     }
   });
 
+  const [dcIntakeRecords, setDcIntakeRecords] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_dc_intake_records');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('mdc_dc_intake_records', JSON.stringify(dcIntakeRecords));
+    } catch (e) {
+      console.warn('LocalStorage save notice for dc_intake_records:', e);
+    }
+  }, [dcIntakeRecords]);
+
   const [stockTransferReports, setStockTransferReports] = useState(() => {
     try {
       if (isExplicitlyCleared()) return [];
@@ -1445,6 +1463,46 @@ export function AppProvider({ children }) {
           });
         }
       }
+
+      // 7. Hydrate DC Intake Records from Supabase
+      try {
+        const { data: dbIntakes } = await supabase
+          .from('dc_intake_records')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(200);
+
+        if (dbIntakes && dbIntakes.length > 0) {
+          setDcIntakeRecords(prev => {
+            const map = new Map((prev || []).map(r => [r.id, r]));
+            dbIntakes.forEach(dbI => {
+              map.set(dbI.id, {
+                id: dbI.id,
+                record_name: dbI.record_name || dbI.id,
+                intake_date: dbI.intake_date,
+                po_id: dbI.po_id,
+                po_number: dbI.po_number,
+                supplier: dbI.supplier,
+                total_units: dbI.total_units || (Array.isArray(dbI.items) ? dbI.items.length : 0),
+                saved_by_name: dbI.saved_by_name || 'Warehouse Staff',
+                saved_by_user_id: dbI.saved_by_user_id,
+                notes: dbI.notes || '',
+                category_breakdown: dbI.category_breakdown || {},
+                items: dbI.items || [],
+                created_at: dbI.created_at,
+                updated_at: dbI.updated_at
+              });
+            });
+            const merged = Array.from(map.values()).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            try {
+              localStorage.setItem('mdc_dc_intake_records', JSON.stringify(merged.slice(0, 100)));
+            } catch (e) {}
+            return merged;
+          });
+        }
+      } catch (intakeErr) {
+        console.warn('dc_intake_records fetch note:', intakeErr.message);
+      }
     } catch (e) {
       console.warn('Supabase initial fetch skipped (offline or unauthenticated):', e.message);
     }
@@ -1472,6 +1530,9 @@ export function AppProvider({ children }) {
         realtimeChannel = supabase
           .channel('public-db-changes')
           .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_units' }, () => {
+            hydrateFromSupabase();
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'dc_intake_records' }, () => {
             hydrateFromSupabase();
           })
           .on('postgres_changes', { event: '*', schema: 'public', table: 'forecast_entries' }, () => {
@@ -3250,6 +3311,147 @@ export function AppProvider({ children }) {
     return { success: true };
   };
 
+  // --- DC INTAKE BATCH RECORDS (MDC202600015 Format) ---
+
+  // Helper to generate standardized sequential intake record ID e.g. "MDC202600015"
+  const generateNextIntakeRecordId = (targetDate = new Date()) => {
+    let year = 2026;
+    if (targetDate instanceof Date && !isNaN(targetDate)) {
+      year = targetDate.getFullYear();
+    } else if (typeof targetDate === 'string') {
+      const parsed = new Date(targetDate);
+      if (!isNaN(parsed)) year = parsed.getFullYear();
+    }
+    const prefix = `MDC${year}`;
+
+    // Find all existing records matching this year's prefix
+    const matching = (dcIntakeRecords || []).filter(r => r.id && String(r.id).toUpperCase().startsWith(prefix));
+
+    let maxSeq = 0;
+    matching.forEach(r => {
+      const numPart = String(r.id).slice(prefix.length);
+      const parsed = parseInt(numPart, 10);
+      if (!isNaN(parsed) && parsed > maxSeq) {
+        maxSeq = parsed;
+      }
+    });
+
+    const nextSeq = maxSeq + 1;
+    return `${prefix}${String(nextSeq).padStart(5, '0')}`;
+  };
+
+  // Save a batch of scanned parts into a permanent DC Intake Record
+  const saveIntakeRecord = async ({
+    recordId,
+    recordName,
+    intakeDate,
+    poId,
+    poNumber,
+    supplier,
+    notes,
+    items = []
+  }) => {
+    const rawDate = intakeDate ? new Date(intakeDate) : new Date();
+    const cleanDateStr = intakeDate || new Date().toISOString().split('T')[0];
+    const generatedId = generateNextIntakeRecordId(rawDate);
+    const finalId = (recordId || generatedId).trim().toUpperCase();
+    const finalName = (recordName || finalId).trim();
+
+    // Group items by category for summary metrics
+    const breakdown = {};
+    items.forEach(it => {
+      const partObj = parts.find(p => p.part_number === it.part_number);
+      const cat = partObj?.category_id || 'cat-general';
+      const cleanCatName = cat.replace('cat-', '').replace(/^\w/, c => c.toUpperCase());
+      breakdown[cleanCatName] = (breakdown[cleanCatName] || 0) + 1;
+    });
+
+    const newRecord = {
+      id: finalId,
+      record_name: finalName,
+      intake_date: cleanDateStr,
+      po_id: poId || null,
+      po_number: poNumber || null,
+      supplier: supplier || null,
+      total_units: items.length,
+      saved_by_name: currentUser?.fullName || 'Warehouse Operations',
+      saved_by_user_id: currentUser?.id && !currentUser.id.startsWith('usr-') ? currentUser.id : null,
+      notes: (notes || '').trim(),
+      category_breakdown: breakdown,
+      items: items.map(u => ({
+        id: u.id || `unit-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        part_number: u.part_number,
+        description: u.description || 'Service Replacement Part',
+        serial_number: u.serial_number,
+        received_at: u.received_at || new Date().toISOString(),
+        received_by: u.received_by || currentUser?.fullName || 'Warehouse Staff',
+        po_id: u.po_id || poId || null
+      })),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    // 1. Update React Local State & localStorage immediately
+    setDcIntakeRecords(prev => [newRecord, ...prev.filter(r => r.id !== finalId)]);
+    try {
+      const existing = JSON.parse(localStorage.getItem('mdc_dc_intake_records') || '[]');
+      const updated = [newRecord, ...existing.filter(r => r.id !== finalId)].slice(0, 100);
+      localStorage.setItem('mdc_dc_intake_records', JSON.stringify(updated));
+    } catch (e) {
+      console.warn('LocalStorage save error for intake records:', e);
+    }
+
+    // 2. Cloud Backup to Supabase PostgreSQL dc_intake_records table
+    if (supabase) {
+      (async () => {
+        try {
+          const { error } = await supabase.from('dc_intake_records').upsert({
+            id: newRecord.id,
+            record_name: newRecord.record_name,
+            intake_date: newRecord.intake_date,
+            po_id: newRecord.po_id && !String(newRecord.po_id).startsWith('po-') ? newRecord.po_id : null,
+            po_number: newRecord.po_number,
+            supplier: newRecord.supplier,
+            total_units: newRecord.total_units,
+            saved_by_name: newRecord.saved_by_name,
+            saved_by_user_id: newRecord.saved_by_user_id,
+            notes: newRecord.notes,
+            category_breakdown: newRecord.category_breakdown,
+            items: newRecord.items,
+            created_at: newRecord.created_at,
+            updated_at: newRecord.updated_at
+          });
+          if (error) {
+            console.warn('Supabase dc_intake_records sync note (saved locally):', error.message);
+          }
+        } catch (dbErr) {
+          console.warn('Supabase dc_intake_records sync exception:', dbErr.message);
+        }
+      })();
+    }
+
+    showToast(`Saved DC Intake Record "${newRecord.record_name}" with ${newRecord.total_units} units to database!`, 'success');
+    return { success: true, record: newRecord };
+  };
+
+  // Delete a saved intake record
+  const deleteIntakeRecord = async (recordId) => {
+    setDcIntakeRecords(prev => prev.filter(r => r.id !== recordId));
+    try {
+      const existing = JSON.parse(localStorage.getItem('mdc_dc_intake_records') || '[]');
+      localStorage.setItem('mdc_dc_intake_records', JSON.stringify(existing.filter(r => r.id !== recordId)));
+    } catch (e) {}
+
+    if (supabase) {
+      try {
+        await supabase.from('dc_intake_records').delete().eq('id', recordId);
+      } catch (e) {}
+    }
+
+    showToast(`Deleted Intake Record ${recordId}`, 'info');
+    return { success: true };
+  };
+
   // 4. Import Stock Transfers Report
   const importStockTransfersReport = async (records, metadata) => {
     setStockTransferReports(records);
@@ -3315,6 +3517,11 @@ export function AppProvider({ children }) {
         scanLogs,
         repairUsageRecords,
         savedRecords,
+        dcIntakeRecords,
+        setDcIntakeRecords,
+        generateNextIntakeRecordId,
+        saveIntakeRecord,
+        deleteIntakeRecord,
         stockTransferReports,
         setStockTransferReports,
         stockTransferMetadata,

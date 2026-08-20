@@ -17,9 +17,12 @@ import {
   Sparkles,
   Search,
   Database,
-  Check
+  Check,
+  BookmarkPlus,
+  Building2
 } from 'lucide-react';
 import { parseScanInPartsFile, downloadScanInTemplate } from '../utils/excelParser';
+import SaveIntakeRecordModal from './SaveIntakeRecordModal';
 
 export default function ScanInReceiving() {
   const {
@@ -29,6 +32,7 @@ export default function ScanInReceiving() {
     parts,
     inventoryUnits,
     setInventoryUnits,
+    setActiveTab,
     showToast
   } = useApp();
 
@@ -36,6 +40,39 @@ export default function ScanInReceiving() {
   const [partNumberInput, setPartNumberInput] = useState('');
   const [serialInput, setSerialInput] = useState('');
   const [scanResult, setScanResult] = useState(null); // { type: 'success' | 'error', message: '' }
+  const [isSaveIntakeModalOpen, setIsSaveIntakeModalOpen] = useState(false);
+
+  // Auto-Receive Feature State with localStorage persistence
+  const [autoReceive, setAutoReceive] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_auto_receive');
+      return saved !== null ? JSON.parse(saved) : true; // Default ON for seamless warehouse workflow
+    } catch (e) {
+      return true;
+    }
+  });
+
+  const [keepPartNumber, setKeepPartNumber] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_keep_pn');
+      return saved !== null ? JSON.parse(saved) : true; // Keep P/N by default for batch serial scanning
+    } catch (e) {
+      return true;
+    }
+  });
+
+  // Sync Auto-Receive settings to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('mdc_auto_receive', JSON.stringify(autoReceive));
+    } catch (e) {}
+  }, [autoReceive]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('mdc_keep_pn', JSON.stringify(keepPartNumber));
+    } catch (e) {}
+  }, [keepPartNumber]);
 
   // Recent scans state for current scanning session
   const [sessionScans, setSessionScans] = useState(() => {
@@ -76,10 +113,16 @@ export default function ScanInReceiving() {
   const pnInputRef = useRef(null);
   const serialInputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const autoScanTimerRef = useRef(null);
 
   // Auto-focus Part Number input on mount
   useEffect(() => {
     pnInputRef.current?.focus();
+    return () => {
+      if (autoScanTimerRef.current) {
+        clearTimeout(autoScanTimerRef.current);
+      }
+    };
   }, []);
 
   // Sync modal PO with hero PO when opening
@@ -89,36 +132,41 @@ export default function ScanInReceiving() {
     }
   }, [isImportModalOpen, selectedPoId]);
 
-  // Handle Part Number submission (Enter key from scanner)
-  const handlePnKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      if (partNumberInput.trim()) {
-        serialInputRef.current?.focus();
-      }
+  // Helper to parse combined 2D / GS1 / Tab-delimited barcode formats
+  const parseBarcodeData = (raw) => {
+    if (!raw) return null;
+    const str = raw.trim();
+    const match = str.match(/^([A-Za-z0-9-]+)[,\t/|#;]([A-Za-z0-9-]+)$/);
+    if (match) {
+      return { pn: match[1].trim(), sn: match[2].trim() };
     }
+    const spaceMatch = str.match(/^([0-9]{3}-[0-9]{4,5})\s+([A-Za-z0-9-]+)$/);
+    if (spaceMatch) {
+      return { pn: spaceMatch[1].trim(), sn: spaceMatch[2].trim() };
+    }
+    return null;
   };
 
-  // Handle Serial submission (Enter key from scanner)
-  const handleSerialKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      executeScan();
+  const executeScan = (overridePn = null, overrideSn = null) => {
+    if (autoScanTimerRef.current) {
+      clearTimeout(autoScanTimerRef.current);
+      autoScanTimerRef.current = null;
     }
-  };
 
-  const executeScan = () => {
-    if (!partNumberInput.trim() || !serialInput.trim()) {
+    const pnToUse = (overridePn !== null ? overridePn : partNumberInput).trim();
+    const snToUse = (overrideSn !== null ? overrideSn : serialInput).trim();
+
+    if (!pnToUse || !snToUse) {
       setScanResult({
         type: 'error',
         message: 'Please provide both Part Number and Serial Number'
       });
-      return;
+      return false;
     }
 
     const res = addScanInUnit({
-      partNumber: partNumberInput.trim(),
-      serialNumber: serialInput.trim(),
+      partNumber: pnToUse,
+      serialNumber: snToUse,
       poId: selectedPoId || null
     });
 
@@ -129,45 +177,168 @@ export default function ScanInReceiving() {
       });
       setSessionScans(prev => [res.unit, ...prev]);
       
-      // Clear inputs and refocus Part Number or keep Part Number for batch scanning
+      // Clear inputs and refocus based on continuous batch scanning preferences
       setSerialInput('');
-      serialInputRef.current?.focus();
+      if (!keepPartNumber && overridePn === null) {
+        setPartNumberInput('');
+        pnInputRef.current?.focus();
+      } else {
+        serialInputRef.current?.focus();
+      }
+      return true;
     } else {
       setScanResult({
         type: 'error',
         message: res.error
       });
       serialInputRef.current?.select();
+      return false;
+    }
+  };
+
+  // Handle Part Number change (detects barcode scanner stream, combined barcodes, and auto-advance)
+  const handlePnChange = (e) => {
+    const val = e.target.value;
+    setPartNumberInput(val);
+
+    if (autoScanTimerRef.current) {
+      clearTimeout(autoScanTimerRef.current);
+      autoScanTimerRef.current = null;
+    }
+
+    if (!autoReceive) return;
+
+    const cleanPn = val.trim();
+    const combined = parseBarcodeData(cleanPn);
+    if (combined) {
+      setPartNumberInput(combined.pn);
+      setSerialInput(combined.sn);
+      executeScan(combined.pn, combined.sn);
+      return;
+    }
+
+    // Auto-advance to Serial field once valid Apple Part Number is scanned (e.g. 661-xxxxx)
+    if (/^[0-9]{3}-[0-9]{4,6}$/i.test(cleanPn) || (cleanPn.length >= 9 && cleanPn.includes('-'))) {
+      autoScanTimerRef.current = setTimeout(() => {
+        serialInputRef.current?.focus();
+        serialInputRef.current?.select();
+      }, 140);
+    }
+  };
+
+  // Handle Serial change (instantly auto-receives once full serial number is complete and scanned!)
+  const handleSerialChange = (e) => {
+    const val = e.target.value;
+    setSerialInput(val);
+
+    if (autoScanTimerRef.current) {
+      clearTimeout(autoScanTimerRef.current);
+      autoScanTimerRef.current = null;
+    }
+
+    if (!autoReceive) return;
+
+    const cleanSerial = val.trim();
+    const cleanPn = partNumberInput.trim();
+
+    const combined = parseBarcodeData(cleanSerial);
+    if (combined) {
+      setPartNumberInput(combined.pn);
+      setSerialInput(combined.sn);
+      executeScan(combined.pn, combined.sn);
+      return;
+    }
+
+    // When full serial number is scanned and complete (>= 8 chars), automatically receive!
+    if (cleanPn && cleanSerial.length >= 8) {
+      autoScanTimerRef.current = setTimeout(() => {
+        executeScan(cleanPn, cleanSerial);
+      }, 160);
+    }
+  };
+
+  // Handle Part Number submission (Enter key from scanner)
+  const handlePnKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const combined = parseBarcodeData(partNumberInput);
+      if (combined) {
+        setPartNumberInput(combined.pn);
+        setSerialInput(combined.sn);
+        if (autoReceive) {
+          executeScan(combined.pn, combined.sn);
+        } else {
+          serialInputRef.current?.focus();
+        }
+        return;
+      }
+      if (partNumberInput.trim()) {
+        serialInputRef.current?.focus();
+        serialInputRef.current?.select();
+      }
+    }
+  };
+
+  // Handle Serial submission (Enter key from scanner)
+  const handleSerialKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const combined = parseBarcodeData(serialInput);
+      if (combined) {
+        setPartNumberInput(combined.pn);
+        setSerialInput(combined.sn);
+        if (autoReceive) {
+          executeScan(combined.pn, combined.sn);
+        } else {
+          serialInputRef.current?.focus();
+        }
+        return;
+      }
+      executeScan();
     }
   };
 
   // Quick Mock Scanner Simulator (for testing without a physical barcode scanner)
   const testSampleParts = [
-    { pn: '661-21991', desc: 'Battery, iPhone 13', sampleSerial: `DN8${Date.now().toString().slice(-6)}MCN3R` },
-    { pn: '661-21996', desc: 'Battery, iPhone 13 Pro', sampleSerial: `DNM${Date.now().toString().slice(-6)}33817` },
-    { pn: '661-22294', desc: 'Battery, iPhone 13 Pro Max', sampleSerial: `F8Y${Date.now().toString().slice(-6)}13XCB` },
-    { pn: '661-30401', desc: 'Display, iPhone 14 Pro Max', sampleSerial: `GH3${Date.now().toString().slice(-6)}00MUZ` }
+    { pn: '661-21991', desc: 'Battery, iPhone 13', prefix: 'DN8', suffix: 'MCN3R' },
+    { pn: '661-21996', desc: 'Battery, iPhone 13 Pro', prefix: 'DNM', suffix: '33817' },
+    { pn: '661-22294', desc: 'Battery, iPhone 13 Pro Max', prefix: 'F8Y', suffix: '13XCB' },
+    { pn: '661-30401', desc: 'Display, iPhone 14 Pro Max', prefix: 'GH3', suffix: '00MUZ' }
   ];
 
-  const handleSimulateScan = (pn, serial) => {
+  const handleSimulateScan = (pn, prefix = 'DN8', suffix = 'MCN3R') => {
+    const randomSerial = `${prefix}${Date.now().toString().slice(-6)}${suffix}`;
+    const serial = randomSerial;
     setPartNumberInput(pn);
     setSerialInput(serial);
-    setTimeout(() => {
-      const res = addScanInUnit({
-        partNumber: pn,
-        serialNumber: serial,
-        poId: selectedPoId || null
-      });
-      if (res.success) {
-        setScanResult({
-          type: 'success',
-          message: `[SIMULATED SCAN] Received: ${res.unit.description} (SN: ${res.unit.serial_number})`
+    if (autoReceive) {
+      setTimeout(() => {
+        const res = addScanInUnit({
+          partNumber: pn,
+          serialNumber: serial,
+          poId: selectedPoId || null
         });
-        setSessionScans(prev => [res.unit, ...prev]);
-      } else {
-        setScanResult({ type: 'error', message: res.error });
-      }
-    }, 150);
+        if (res.success) {
+          setScanResult({
+            type: 'success',
+            message: `[AUTO-RECEIVED] ${res.unit.description} (SN: ${res.unit.serial_number})`
+          });
+          setSessionScans(prev => [res.unit, ...prev]);
+          setSerialInput('');
+          if (!keepPartNumber) {
+            setPartNumberInput('');
+            pnInputRef.current?.focus();
+          } else {
+            serialInputRef.current?.focus();
+          }
+        } else {
+          setScanResult({ type: 'error', message: res.error });
+        }
+      }, 120);
+    } else {
+      showToast(`Scanned ${pn} (S/N: ${serial}). Auto-Receive is OFF — click Receive button to save.`, 'info');
+      serialInputRef.current?.focus();
+    }
   };
 
   // --- XLSX / CSV File Import Handling ---
@@ -287,73 +458,124 @@ export default function ScanInReceiving() {
     <div className="scanner-container">
       {/* Scanner Workstation Hero Card */}
       <div className="scanner-hero">
-        <div className="scanner-hero-header">
+        {/* Header Row: Title & System Telemetry Status (Read-Only Badges) */}
+        <div className="scanner-hero-header" style={{ marginBottom: '18px', alignItems: 'flex-start' }}>
           <div>
-            <h2 style={{ color: '#fff', fontSize: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Barcode size={22} color="#38bdf8" />
+            <h2 style={{ color: '#fff', fontSize: '21px', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+              <Barcode size={24} color="#38bdf8" />
               <span>DC Receive Scan-In Station</span>
             </h2>
-            <p style={{ color: '#94a3b8', fontSize: '12.5px', marginTop: '2px' }}>
-              Physical Keyboard HID Barcode Scanner Active • Auto-Advance on Enter • Persistent Database Storage
+            <p style={{ color: '#94a3b8', fontSize: '13px', marginTop: '3px', margin: '3px 0 0 0' }}>
+              Physical Keyboard HID Barcode Scanner Active • Automatic Database Persistence
             </p>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              background: 'rgba(56, 189, 248, 0.12)',
-              border: '1px solid rgba(56, 189, 248, 0.3)',
-              borderRadius: 'var(--radius-full)',
-              padding: '4px 10px',
-              fontSize: '11.5px',
-              color: '#38bdf8'
-            }}>
-              <Database size={13} />
+          {/* System Telemetry Badges (Read-Only Information Badges) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <div className="telemetry-badge" title="Total active parts in DC stock inventory">
+              <Database size={14} color="#38bdf8" />
               <span>DC Stock: <strong>{availableInStockUnits.length} units</strong></span>
             </div>
 
-            <button
-              className="btn btn-secondary btn-sm"
-              onClick={() => setIsImportModalOpen(true)}
-              style={{
-                background: '#1e293b',
-                color: '#38bdf8',
-                borderColor: '#38bdf8',
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              <FileSpreadsheet size={16} />
-              <span>Import XLSX / CSV</span>
-            </button>
-
-            <div className="scanner-status-indicator">
+            <div className="telemetry-badge" title="Hardware Scanner Connection Status">
               <div className="pulse-dot" />
-              <span>Scanner Ready (HID)</span>
+              <span style={{ color: '#34d399', fontWeight: 600 }}>Scanner: Ready (HID)</span>
             </div>
           </div>
         </div>
 
-        {/* PO Selector */}
-        <div style={{ marginBottom: '20px', maxWidth: '400px' }}>
-          <label className="scanner-field-label">Linked Purchase Order (Optional)</label>
-          <select
-            className="form-select"
-            style={{ width: '100%', background: '#1e293b', color: '#fff', borderColor: '#334155' }}
-            value={selectedPoId}
-            onChange={(e) => setSelectedPoId(e.target.value)}
-          >
-            <option value="">-- No PO (Direct Intake) --</option>
-            {purchaseOrders.map(po => (
-              <option key={po.id} value={po.id}>
-                {po.po_number} ({po.status})
-              </option>
-            ))}
-          </select>
+        {/* Workstation Controls & Actions Toolbar (3 Distinct Logical Columns) */}
+        <div className="workstation-controls-bar">
+          {/* Column 1: PO Selector */}
+          <div>
+            <label className="workstation-col-label">
+              <Building2 size={13} color="#38bdf8" />
+              <span>1. Linked Purchase Order</span>
+            </label>
+            <select
+              className="form-select"
+              style={{ width: '100%', background: '#0f172a', color: '#fff', borderColor: '#334155', height: '42px', fontSize: '13px' }}
+              value={selectedPoId}
+              onChange={(e) => setSelectedPoId(e.target.value)}
+            >
+              <option value="">-- Direct Intake (No PO) --</option>
+              {purchaseOrders.map(po => (
+                <option key={po.id} value={po.id}>
+                  {po.po_number} ({po.status})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Column 2: Auto-Receive Switch & Settings */}
+          <div>
+            <label className="workstation-col-label">
+              <Zap size={13} color={autoReceive ? "#10b981" : "#94a3b8"} />
+              <span>2. Scanner Intake Mode</span>
+            </label>
+            <div
+              className={`auto-receive-card-switch ${autoReceive ? 'active' : ''}`}
+              onClick={() => {
+                const next = !autoReceive;
+                setAutoReceive(next);
+                showToast(`Auto-Receive Parts ${next ? 'ENABLED (Instant intake on barcode scan)' : 'DISABLED (Manual confirmation required)'}`, next ? 'success' : 'info');
+              }}
+              title={autoReceive ? "Click to disable Auto-Receive" : "Click to enable Auto-Receive"}
+            >
+              <div>
+                <strong style={{ fontSize: '12.5px', color: autoReceive ? '#34d399' : '#cbd5e1', display: 'block' }}>
+                  {autoReceive ? '⚡ Auto-Receive: ON' : 'Auto-Receive: OFF'}
+                </strong>
+                <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                  {autoReceive ? 'Intakes instantly on scan' : 'Requires manual click'}
+                </span>
+              </div>
+              <div className={`toggle-switch-pill ${autoReceive ? 'checked' : ''}`}>
+                <div className="toggle-knob" />
+              </div>
+            </div>
+
+            {autoReceive && (
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11.5px', color: '#cbd5e1', cursor: 'pointer', marginTop: '6px' }}>
+                <input
+                  type="checkbox"
+                  checked={keepPartNumber}
+                  onChange={(e) => setKeepPartNumber(e.target.checked)}
+                  style={{ accentColor: '#10b981', cursor: 'pointer' }}
+                />
+                <span>Keep P/N for batch scanning</span>
+              </label>
+            )}
+          </div>
+
+          {/* Column 3: Workstation Action Buttons */}
+          <div>
+            <label className="workstation-col-label">
+              <Sparkles size={13} color="#38bdf8" />
+              <span>3. Batch Actions</span>
+            </label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <button
+                type="button"
+                className="action-btn-emerald"
+                onClick={() => setIsSaveIntakeModalOpen(true)}
+                title="Save current scanned parts into a permanent DC Intake Record (MDC202600015)"
+              >
+                <BookmarkPlus size={15} />
+                <span>Save Intake Record ({sessionScans.length > 0 ? sessionScans.length : availableInStockUnits.length})</span>
+              </button>
+
+              <button
+                type="button"
+                className="action-btn-slate"
+                onClick={() => setIsImportModalOpen(true)}
+                title="Bulk upload parts spreadsheet (.xlsx / .csv)"
+              >
+                <FileSpreadsheet size={15} />
+                <span>Import Spreadsheet</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Dual Input Fields for Barcode Scans */}
@@ -366,7 +588,7 @@ export default function ScanInReceiving() {
               className="scanner-input"
               placeholder="e.g. 661-21991"
               value={partNumberInput}
-              onChange={(e) => setPartNumberInput(e.target.value)}
+              onChange={handlePnChange}
               onKeyDown={handlePnKeyDown}
             />
           </div>
@@ -379,14 +601,26 @@ export default function ScanInReceiving() {
               className="scanner-input"
               placeholder="e.g. F8Y6276C1UQ13XCB1"
               value={serialInput}
-              onChange={(e) => setSerialInput(e.target.value)}
+              onChange={handleSerialChange}
               onKeyDown={handleSerialKeyDown}
             />
           </div>
 
           <div>
-            <button className="btn btn-primary btn-lg" onClick={executeScan} style={{ height: '54px' }}>
-              <span>Receive</span>
+            <button
+              className={`btn ${autoReceive ? 'btn-primary' : 'btn-secondary'} btn-lg`}
+              onClick={() => executeScan()}
+              style={{
+                height: '54px',
+                minWidth: '130px',
+                background: autoReceive ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)' : '#1e293b',
+                borderColor: autoReceive ? '#38bdf8' : '#475569',
+                color: '#fff',
+                fontWeight: 600
+              }}
+              title={autoReceive ? "Auto-Receive is Active: Press Enter or scan barcode to receive automatically" : "Click to manually confirm and receive part"}
+            >
+              <span>{autoReceive ? 'Receive ↵' : 'Receive'}</span>
               <ArrowRight size={18} />
             </button>
           </div>
@@ -424,7 +658,7 @@ export default function ScanInReceiving() {
             <button
               key={idx}
               className="btn btn-secondary btn-sm"
-              onClick={() => handleSimulateScan(sample.pn, sample.sampleSerial)}
+              onClick={() => handleSimulateScan(sample.pn, sample.prefix, sample.suffix)}
             >
               <span>+ Scan {sample.desc}</span>
             </button>
@@ -830,6 +1064,17 @@ export default function ScanInReceiving() {
           </div>
         </div>
       )}
+
+      {/* Save Intake Record Modal Dialog */}
+      <SaveIntakeRecordModal
+        isOpen={isSaveIntakeModalOpen}
+        onClose={() => setIsSaveIntakeModalOpen(false)}
+        initialUnits={sessionScans.length > 0 ? sessionScans : availableInStockUnits}
+        defaultPoId={selectedPoId}
+        onSaved={() => {
+          setActiveTab('intake-records');
+        }}
+      />
     </div>
   );
 }
