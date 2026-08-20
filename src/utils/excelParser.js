@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
+import canonicalShares from '../data/canonicalShares.js';
 import { calculateLinearRegressionForecast, calculateRecommendedOrder } from './forecastEngine.js';
 import { calculateProportionalAllocation, calculate2DCumulativeAllocation, calculateWeeklySplit } from './allocationEngine.js';
 
@@ -468,8 +469,8 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             });
           }
 
-          const dispShares = buildCatShares(CANONICAL_DISPLAY_DESCS);
-          const battShares = buildCatShares(CANONICAL_BATTERY_SHARE_DESCS);
+          const dispShares = canonicalShares?.displayShares || buildCatShares(CANONICAL_DISPLAY_DESCS);
+          const battShares = canonicalShares?.batteryShares || buildCatShares(CANONICAL_BATTERY_SHARE_DESCS);
 
           const generatedAllocations = [];
           let curRow = 3;
@@ -632,10 +633,10 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             };
           });
 
-          // Build uniform share baseline
+          // Build canonical share baseline
           const uniformShares = activeServiceSites.map(() => 1 / activeServiceSites.length);
-          const dispShareMatrix = CANONICAL_DISPLAY_DESCS.map(() => uniformShares);
-          const battShareMatrix = CANONICAL_BATTERY_SHARE_DESCS.map(() => uniformShares);
+          const dispShareMatrix = canonicalShares?.displayShares || CANONICAL_DISPLAY_DESCS.map(() => uniformShares);
+          const battShareMatrix = canonicalShares?.batteryShares || CANONICAL_BATTERY_SHARE_DESCS.map(() => uniformShares);
 
           const generatedAllocations = [];
           let curRow = 3;
@@ -1279,8 +1280,13 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     });
   }
 
-  const displayShareMatrix = buildCategoryShareMatrix(CANONICAL_DISPLAY_DESCS);
-  const batteryShareMatrix = buildCategoryShareMatrix(CANONICAL_BATTERY_SHARE_DESCS);
+  const displayShareMatrix = ((targetMonthIdx === 7 || defaultFileMonthIdx === 7) && canonicalShares?.displayShares)
+    ? canonicalShares.displayShares
+    : buildCategoryShareMatrix(CANONICAL_DISPLAY_DESCS);
+
+  const batteryShareMatrix = ((targetMonthIdx === 7 || defaultFileMonthIdx === 7) && canonicalShares?.batteryShares)
+    ? canonicalShares.batteryShares
+    : buildCategoryShareMatrix(CANONICAL_BATTERY_SHARE_DESCS);
 
   const forecastItems = [];
   const allocations = [];
