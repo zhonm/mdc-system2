@@ -78,32 +78,29 @@ export default function ScanInReceiving() {
     } catch (e) {}
   }, [keepPartNumber]);
 
-  // Recent scans state for current scanning session
+  // Recent scans state for active intake session
   const [sessionScans, setSessionScans] = useState(() => {
-    return (inventoryUnits || []).slice(0, 50);
+    try {
+      const saved = localStorage.getItem('mdc_recent_scans');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
   });
 
-  // Keep sessionScans synchronized with incoming scanned inventoryUnits
+  // Sync sessionScans to localStorage
   useEffect(() => {
-    if (!inventoryUnits || inventoryUnits.length === 0) {
-      setSessionScans([]);
-      try {
+    try {
+      if (sessionScans.length > 0) {
+        localStorage.setItem('mdc_recent_scans', JSON.stringify(sessionScans));
+      } else {
         localStorage.removeItem('mdc_recent_scans');
-      } catch (e) {}
-    } else {
-      setSessionScans(prev => {
-        const map = new Map((prev || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
-        inventoryUnits.forEach(u => {
-          const s = String(u.serial_number || '').toUpperCase();
-          if (!map.has(s)) map.set(s, u);
-        });
-        return Array.from(map.values()).slice(0, 100);
-      });
-    }
-  }, [inventoryUnits]);
+      }
+    } catch (e) {}
+  }, [sessionScans]);
 
-  // View & Filter States for Table
-  const [activeTableView, setActiveTableView] = useState('ALL_DC_STOCK'); // 'ALL_DC_STOCK' | 'SESSION_SCANS'
+  // View & Filter States for Table (Defaults to active scanning session)
+  const [activeTableView, setActiveTableView] = useState('SESSION_SCANS'); // 'SESSION_SCANS' | 'ALL_DC_STOCK'
   const [tableSearch, setTableSearch] = useState('');
 
   // Import Modal State
@@ -411,8 +408,8 @@ export default function ScanInReceiving() {
         message: `[BATCH IMPORT COMPLETE] Successfully received & saved ${res.count} parts from "${parsedBatch.fileName}" into DC Database!`
       });
 
-      // Switch view to show the newly imported items
-      setActiveTableView('ALL_DC_STOCK');
+      // Switch view to show the newly imported items in current session
+      setActiveTableView('SESSION_SCANS');
 
       // Reset and close modal
       setParsedBatch(null);
@@ -438,7 +435,7 @@ export default function ScanInReceiving() {
   const displayedUnits = useMemo(() => {
     let sourceList = activeTableView === 'ALL_DC_STOCK'
       ? availableInStockUnits
-      : sessionScans.filter(u => u.status === 'in_stock' || (!u.status && u.current_site_id === 'site-dc') || activeTableView === 'SESSION_SCANS');
+      : sessionScans;
 
     if (!sourceList) sourceList = [];
 
@@ -1129,6 +1126,7 @@ export default function ScanInReceiving() {
         onSaved={(newRec) => {
           // Clear active session intake history from station view and localStorage
           setSessionScans([]);
+          setActiveTableView('SESSION_SCANS');
           try {
             localStorage.removeItem('mdc_recent_scans');
           } catch (e) {
@@ -1136,9 +1134,11 @@ export default function ScanInReceiving() {
           }
           setPartNumberInput('');
           setSerialInput('');
-          setScanResult(null);
-          showToast(`Saved Batch "${newRec.id}". Scan-In station is clean & ready for newly arrived parts!`, 'success');
-          setActiveTab('intake-records');
+          setScanResult({
+            type: 'success',
+            message: `[BATCH SAVED & ARCHIVED] Successfully saved batch "${newRec.id}" (${newRec.total_units || newRec.items?.length || 0} parts) to Database. Intake History is cleared and ready for new parts!`
+          });
+          showToast(`Saved Batch "${newRec.id}". Intake History cleared & station ready!`, 'success');
         }}
       />
 
