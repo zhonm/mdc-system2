@@ -1126,7 +1126,18 @@ export default function ScanInReceiving() {
         onClose={() => setIsSaveIntakeModalOpen(false)}
         initialUnits={sessionScans.length > 0 ? sessionScans : availableInStockUnits}
         defaultPoId={selectedPoId}
-        onSaved={() => {
+        onSaved={(newRec) => {
+          // Clear active session intake history from station view and localStorage
+          setSessionScans([]);
+          try {
+            localStorage.removeItem('mdc_recent_scans');
+          } catch (e) {
+            console.warn('LocalStorage clear error:', e);
+          }
+          setPartNumberInput('');
+          setSerialInput('');
+          setScanResult(null);
+          showToast(`Saved Batch "${newRec.id}". Scan-In station is clean & ready for newly arrived parts!`, 'success');
           setActiveTab('intake-records');
         }}
       />

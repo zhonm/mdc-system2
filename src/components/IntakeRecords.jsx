@@ -551,6 +551,9 @@ export default function IntakeRecords() {
         onClose={() => setIsSaveModalOpen(false)}
         initialUnits={todayScannedUnits.length > 0 ? todayScannedUnits : (inventoryUnits || []).slice(0, 50)}
         onSaved={(newRec) => {
+          try {
+            localStorage.removeItem('mdc_recent_scans');
+          } catch (e) {}
           setSelectedRecordToInspect(newRec);
         }}
       />
