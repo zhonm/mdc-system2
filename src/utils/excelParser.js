@@ -2520,12 +2520,14 @@ export async function parseScanInPartsFile(file, existingParts = [], existingUni
       if (!cleanPN) {
         status = 'ERROR';
         statusMessage = 'Missing Part Number';
-      } else if (existingSerialsSet.has(cleanSerial)) {
-        status = 'DUPLICATE';
-        statusMessage = 'Serial already in DC inventory';
       } else if (seenSerialsInBatch.has(cleanSerial)) {
+        // True duplicate: the exact same serial number is repeated across multiple rows within this spreadsheet
         status = 'DUPLICATE';
-        statusMessage = 'Duplicate Serial in file';
+        statusMessage = 'Repeated serial in spreadsheet';
+      } else if (existingSerialsSet.has(cleanSerial)) {
+        // Already registered in DC inventory: safe to re-import / update
+        status = 'EXISTING_INVENTORY';
+        statusMessage = 'Already in DC Stock (Will re-sync/update details)';
       } else if (!existingPart) {
         status = 'NEW_PART';
         statusMessage = 'New Part (will auto-register in catalog)';
@@ -2552,8 +2554,9 @@ export async function parseScanInPartsFile(file, existingParts = [], existingUni
       return { success: false, error: 'No valid part records found in the uploaded file.' };
     }
 
-    const validCount = parsedItems.filter(it => it.status === 'VALID' || it.status === 'NEW_PART').length;
+    const validCount = parsedItems.filter(it => it.status === 'VALID' || it.status === 'NEW_PART' || it.status === 'EXISTING_INVENTORY').length;
     const duplicateCount = parsedItems.filter(it => it.status === 'DUPLICATE').length;
+    const existingInStockCount = parsedItems.filter(it => it.status === 'EXISTING_INVENTORY').length;
     const newPartsCount = parsedItems.filter(it => it.status === 'NEW_PART').length;
     const errorCount = parsedItems.filter(it => it.status === 'ERROR').length;
 
@@ -2565,6 +2568,7 @@ export async function parseScanInPartsFile(file, existingParts = [], existingUni
         total: parsedItems.length,
         valid: validCount,
         duplicates: duplicateCount,
+        existingInStock: existingInStockCount,
         newParts: newPartsCount,
         errors: errorCount
       }

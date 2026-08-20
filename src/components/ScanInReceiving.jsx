@@ -391,7 +391,7 @@ export default function ScanInReceiving() {
   const handleConfirmBatchImport = () => {
     if (!parsedBatch || !parsedBatch.items) return;
 
-    const validItems = parsedBatch.items.filter(it => it.status === 'VALID' || it.status === 'NEW_PART');
+    const validItems = parsedBatch.items.filter(it => it.status === 'VALID' || it.status === 'NEW_PART' || it.status === 'EXISTING_INVENTORY');
     if (validItems.length === 0) {
       showToast('No valid parts to import.', 'error');
       return;
@@ -421,7 +421,8 @@ export default function ScanInReceiving() {
   };
 
   const filteredPreviewItems = (parsedBatch?.items || []).filter(item => {
-    if (importFilter === 'VALID') return item.status === 'VALID' || item.status === 'NEW_PART';
+    if (importFilter === 'VALID') return item.status === 'VALID' || item.status === 'NEW_PART' || item.status === 'EXISTING_INVENTORY';
+    if (importFilter === 'EXISTING') return item.status === 'EXISTING_INVENTORY';
     if (importFilter === 'DUPLICATE') return item.status === 'DUPLICATE';
     return true;
   });
@@ -994,26 +995,26 @@ export default function ScanInReceiving() {
                       <span className="import-stat-label" style={{ color: '#16a34a' }}>Ready to Receive</span>
                       <span className="import-stat-value" style={{ color: '#16a34a' }}>{parsedBatch.summary.valid}</span>
                     </div>
-                    <div className="import-stat-card" style={{ borderColor: parsedBatch.summary.duplicates > 0 ? '#fed7aa' : '#e2e8f0' }}>
-                      <span className="import-stat-label" style={{ color: parsedBatch.summary.duplicates > 0 ? '#ea580c' : 'var(--text-muted)' }}>
-                        Duplicates (Skip)
+                    <div className="import-stat-card" style={{ borderColor: (parsedBatch.summary.existingInStock || 0) > 0 ? '#bae6fd' : '#e2e8f0', background: (parsedBatch.summary.existingInStock || 0) > 0 ? '#f0f9ff' : 'transparent' }}>
+                      <span className="import-stat-label" style={{ color: (parsedBatch.summary.existingInStock || 0) > 0 ? '#0284c7' : 'var(--text-muted)' }}>
+                        Already in Stock
                       </span>
-                      <span className="import-stat-value" style={{ color: parsedBatch.summary.duplicates > 0 ? '#ea580c' : 'var(--text-muted)' }}>
-                        {parsedBatch.summary.duplicates}
+                      <span className="import-stat-value" style={{ color: (parsedBatch.summary.existingInStock || 0) > 0 ? '#0284c7' : 'var(--text-muted)' }}>
+                        {parsedBatch.summary.existingInStock || 0}
                       </span>
                     </div>
-                    <div className="import-stat-card" style={{ borderColor: parsedBatch.summary.newParts > 0 ? '#bae6fd' : '#e2e8f0' }}>
-                      <span className="import-stat-label" style={{ color: parsedBatch.summary.newParts > 0 ? '#0284c7' : 'var(--text-muted)' }}>
-                        New Catalog Parts
+                    <div className="import-stat-card" style={{ borderColor: parsedBatch.summary.duplicates > 0 ? '#fecaca' : '#e2e8f0' }}>
+                      <span className="import-stat-label" style={{ color: parsedBatch.summary.duplicates > 0 ? '#dc2626' : 'var(--text-muted)' }}>
+                        Repeated in File
                       </span>
-                      <span className="import-stat-value" style={{ color: parsedBatch.summary.newParts > 0 ? '#0284c7' : 'var(--text-muted)' }}>
-                        {parsedBatch.summary.newParts}
+                      <span className="import-stat-value" style={{ color: parsedBatch.summary.duplicates > 0 ? '#dc2626' : 'var(--text-muted)' }}>
+                        {parsedBatch.summary.duplicates}
                       </span>
                     </div>
                   </div>
 
                   {/* Filter tabs */}
-                  <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
                     <button
                       className={`btn btn-sm ${importFilter === 'ALL' ? 'btn-primary' : 'btn-secondary'}`}
                       onClick={() => setImportFilter('ALL')}
@@ -1024,14 +1025,23 @@ export default function ScanInReceiving() {
                       className={`btn btn-sm ${importFilter === 'VALID' ? 'btn-primary' : 'btn-secondary'}`}
                       onClick={() => setImportFilter('VALID')}
                     >
-                      Valid Only ({parsedBatch.summary.valid})
+                      Ready to Receive ({parsedBatch.summary.valid})
                     </button>
+                    {(parsedBatch.summary.existingInStock || 0) > 0 && (
+                      <button
+                        className={`btn btn-sm ${importFilter === 'EXISTING' ? 'btn-primary' : 'btn-secondary'}`}
+                        onClick={() => setImportFilter('EXISTING')}
+                        style={{ background: importFilter === 'EXISTING' ? '#0284c7' : 'transparent', color: importFilter === 'EXISTING' ? '#fff' : '#0369a1', borderColor: '#bae6fd' }}
+                      >
+                        In-Stock Updates ({parsedBatch.summary.existingInStock})
+                      </button>
+                    )}
                     {parsedBatch.summary.duplicates > 0 && (
                       <button
                         className={`btn btn-sm ${importFilter === 'DUPLICATE' ? 'btn-danger' : 'btn-secondary'}`}
                         onClick={() => setImportFilter('DUPLICATE')}
                       >
-                        Duplicates ({parsedBatch.summary.duplicates})
+                        Repeated ({parsedBatch.summary.duplicates})
                       </button>
                     )}
                   </div>
@@ -1059,14 +1069,19 @@ export default function ScanInReceiving() {
                                   Ready
                                 </span>
                               )}
+                              {item.status === 'EXISTING_INVENTORY' && (
+                                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', fontSize: '11px' }} title="Part already registered in DC inventory - Will update & sync intake record">
+                                  In-Stock (Update)
+                                </span>
+                              )}
                               {item.status === 'NEW_PART' && (
-                                <span className="badge" style={{ background: '#e0f2fe', color: '#0369a1', fontSize: '11px' }}>
+                                <span className="badge" style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', fontSize: '11px' }}>
                                   New Part
                                 </span>
                               )}
                               {item.status === 'DUPLICATE' && (
-                                <span className="badge" style={{ background: '#fee2e2', color: '#dc2626', fontSize: '11px' }}>
-                                  Duplicate S/N
+                                <span className="badge" style={{ background: '#fee2e2', color: '#dc2626', fontSize: '11px' }} title="Same serial appears on multiple rows in this spreadsheet">
+                                  Repeated in File
                                 </span>
                               )}
                               {item.status === 'ERROR' && (

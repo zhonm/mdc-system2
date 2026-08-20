@@ -2096,15 +2096,17 @@ export function AppProvider({ children }) {
     const newlyCreatedParts = [];
     const poMap = new Map();
 
-    const existingSerials = new Set(inventoryUnits.map(u => String(u.serial_number || '').toUpperCase()));
+    const seenSerials = new Set();
+    const existingInventoryMap = new Map((inventoryUnits || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
 
     for (const item of itemsList) {
-      const cleanPN = String(item.part_number || '').trim().toUpperCase();
-      const cleanSerial = String(item.serial_number || '').trim().toUpperCase();
+      const cleanPN = String(item.part_number || item.partNumber || '').trim().toUpperCase();
+      const cleanSerial = String(item.serial_number || item.serialNumber || '').trim().toUpperCase();
 
       if (!cleanPN || !cleanSerial) continue;
-      if (existingSerials.has(cleanSerial)) continue;
-      existingSerials.add(cleanSerial);
+      // Prevent internal duplicate within the same batch file
+      if (seenSerials.has(cleanSerial)) continue;
+      seenSerials.add(cleanSerial);
 
       let part = currentParts.find(p => p.part_number.toUpperCase() === cleanPN);
       if (!part) {
@@ -2123,22 +2125,23 @@ export function AppProvider({ children }) {
       }
 
       const assignedPoId = item.poId || defaultPoId || null;
+      const existingUnit = existingInventoryMap.get(cleanSerial);
 
-      const newUnit = {
-        id: `unit-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      const processedUnit = {
+        id: existingUnit?.id || `unit-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
         part_id: part.id,
         part_number: part.part_number,
         description: item.description || part.description,
         serial_number: cleanSerial,
         current_site_id: 'site-dc',
-        po_id: assignedPoId,
+        po_id: assignedPoId || existingUnit?.po_id || null,
         status: 'in_stock',
-        box_number: item.boxNumber || 1,
-        received_at: new Date().toISOString(),
+        box_number: item.boxNumber || existingUnit?.box_number || 1,
+        received_at: existingUnit?.received_at || new Date().toISOString(),
         received_by: currentUser?.fullName || 'Warehouse Staff (Import)'
       };
 
-      newUnits.push(newUnit);
+      newUnits.push(processedUnit);
 
       if (assignedPoId) {
         if (!poMap.has(assignedPoId)) {
@@ -2161,7 +2164,7 @@ export function AppProvider({ children }) {
     }
 
     if (newUnits.length === 0) {
-      return { success: false, error: 'No new units to import (all duplicate serials or invalid)' };
+      return { success: false, error: 'No valid units found to import' };
     }
 
     if (newlyCreatedParts.length > 0) {
