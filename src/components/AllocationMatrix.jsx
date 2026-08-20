@@ -40,7 +40,8 @@ export default function AllocationMatrix() {
     runAutoAllocation,
     inventoryUnits,
     setActiveTab,
-    showToast
+    showToast,
+    activePeriod
   } = useApp();
 
   const [activeViewMode, setActiveViewMode] = useState('sheet'); // 'sheet' | 'shares'
@@ -79,94 +80,113 @@ export default function AllocationMatrix() {
   // Split into Displays, Batteries, and Other
   const displayItems = filteredAllocations.filter(item => {
     const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-    return part?.category_id === 'cat-display' || item.category_id === 'cat-display' || item.description?.toLowerCase().includes('display') || item.description?.toLowerCase().includes('screen');
+    return (part?.category_id === 'cat-display') || item.category_id === 'cat-display' || item.description?.toLowerCase().includes('display') || item.description?.toLowerCase().includes('screen');
   });
 
   const batteryItems = filteredAllocations.filter(item => {
     const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-    return part?.category_id === 'cat-battery' || item.category_id === 'cat-battery' || (!displayItems.includes(item) && (item.description?.toLowerCase().includes('battery') || item.description?.toLowerCase().includes('batt')));
+    return (part?.category_id === 'cat-battery') || item.category_id === 'cat-battery' || (!displayItems.includes(item) && (item.description?.toLowerCase().includes('battery') || item.description?.toLowerCase().includes('batt')));
   });
 
   const otherItems = filteredAllocations.filter(item => !displayItems.includes(item) && !batteryItems.includes(item));
 
-  // Compute category sub-totals and site breakdowns
-  // Compute category sub-totals and site breakdowns
-  const computeGroupTotals = (items, startRowIndex = 3) => {
-    let totalQty = 0;
+  // Calculate Group Summaries
+  const calculateGroupTotals = (items, fallbackPrice = 150) => {
+    let totalAlloc = 0;
     let totalCost = 0;
-    let totalW1 = 0;
-    let totalW2 = 0;
-    let totalW3 = 0;
-    let totalW4 = 0;
-    let totalW1Cost = 0;
-    let totalW2Cost = 0;
-    let totalW3Cost = 0;
-    let totalW4Cost = 0;
-    const perSite = {};
-    orderedServiceSites.forEach(s => { perSite[s.id] = 0; });
+    let w1Qty = 0, w2Qty = 0, w3Qty = 0, w4Qty = 0;
+    let w1Cost = 0, w2Cost = 0, w3Cost = 0, w4Cost = 0;
+    const siteTotals = {};
 
-    items.forEach((item, idx) => {
-      const qty = item.total_allocated_qty || 0;
+    items.forEach((item, rIdx) => {
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const isDisplay = item.category_id === 'cat-display' || part?.category_id === 'cat-display' || item.description?.toLowerCase().includes('display');
-      const fallbackPrice = isDisplay ? 279 : 99;
-      const price = item.stocking_price || part?.stocking_price || fallbackPrice;
-      const rowCost = qty * price;
-      const excelRowNumber = startRowIndex + idx;
-      const split = calculateWeeklySplit(qty, rowCost, excelRowNumber);
+      const stockPrice = item.stocking_price || part?.stocking_price || fallbackPrice;
+      const qty = item.total_allocated_qty || 0;
+      const rowCost = qty * stockPrice;
+      const split = calculateWeeklySplit(qty, rowCost, rIdx + 3);
 
-      totalQty += qty;
+      totalAlloc += qty;
       totalCost += rowCost;
-      totalW1 += split.w1_qty;
-      totalW2 += split.w2_qty;
-      totalW3 += split.w3_qty;
-      totalW4 += split.w4_qty;
-      totalW1Cost += split.w1_cost;
-      totalW2Cost += split.w2_cost;
-      totalW3Cost += split.w3_cost;
-      totalW4Cost += split.w4_cost;
+      w1Qty += split.w1_qty;
+      w2Qty += split.w2_qty;
+      w3Qty += split.w3_qty;
+      w4Qty += split.w4_qty;
+      w1Cost += split.w1_cost;
+      w2Cost += split.w2_cost;
+      w3Cost += split.w3_cost;
+      w4Cost += split.w4_cost;
 
       orderedServiceSites.forEach(s => {
-        perSite[s.id] = (perSite[s.id] || 0) + (item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0);
+        const branchQty = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
+        siteTotals[s.id] = (siteTotals[s.id] || 0) + branchQty;
       });
     });
 
-    return { totalQty, totalCost, totalW1, totalW2, totalW3, totalW4, totalW1Cost, totalW2Cost, totalW3Cost, totalW4Cost, perSite };
+    return {
+      totalAlloc,
+      totalQty: totalAlloc,
+      totalCost,
+      w1Qty,
+      totalW1: w1Qty,
+      w2Qty,
+      totalW2: w2Qty,
+      w3Qty,
+      totalW3: w3Qty,
+      w4Qty,
+      totalW4: w4Qty,
+      w1Cost,
+      totalW1Cost: w1Cost,
+      w2Cost,
+      totalW2Cost: w2Cost,
+      w3Cost,
+      totalW3Cost: w3Cost,
+      w4Cost,
+      totalW4Cost: w4Cost,
+      siteTotals,
+      perSite: siteTotals
+    };
   };
 
-  const displayTotals = computeGroupTotals(displayItems, 3);
-  const batteryTotals = computeGroupTotals(batteryItems, 25);
-  
-  // Grand totals across all parts
+  const displayTotals = calculateGroupTotals(displayItems, 279);
+  const batteryTotals = calculateGroupTotals(batteryItems, 99);
+  const otherTotals = calculateGroupTotals(otherItems, 100);
+
   const grandGroupTotals = {
-    totalQty: displayTotals.totalQty + batteryTotals.totalQty,
-    totalCost: displayTotals.totalCost + batteryTotals.totalCost,
-    totalW1: displayTotals.totalW1 + batteryTotals.totalW1,
-    totalW2: displayTotals.totalW2 + batteryTotals.totalW2,
-    totalW3: displayTotals.totalW3 + batteryTotals.totalW3,
-    totalW4: displayTotals.totalW4 + batteryTotals.totalW4,
-    totalW1Cost: displayTotals.totalW1Cost + batteryTotals.totalW1Cost,
-    totalW2Cost: displayTotals.totalW2Cost + batteryTotals.totalW2Cost,
-    totalW3Cost: displayTotals.totalW3Cost + batteryTotals.totalW3Cost,
-    totalW4Cost: displayTotals.totalW4Cost + batteryTotals.totalW4Cost,
-    perSite: {}
+    totalAlloc: displayTotals.totalAlloc + batteryTotals.totalAlloc + otherTotals.totalAlloc,
+    totalCost: displayTotals.totalCost + batteryTotals.totalCost + otherTotals.totalCost,
+    totalW1: displayTotals.w1Qty + batteryTotals.w1Qty + otherTotals.w1Qty,
+    totalW2: displayTotals.w2Qty + batteryTotals.w2Qty + otherTotals.w2Qty,
+    totalW3: displayTotals.w3Qty + batteryTotals.w3Qty + otherTotals.w3Qty,
+    totalW4: displayTotals.w4Qty + batteryTotals.w4Qty + otherTotals.w4Qty,
+    w1Qty: displayTotals.w1Qty + batteryTotals.w1Qty + otherTotals.w1Qty,
+    w2Qty: displayTotals.w2Qty + batteryTotals.w2Qty + otherTotals.w2Qty,
+    w3Qty: displayTotals.w3Qty + batteryTotals.w3Qty + otherTotals.w3Qty,
+    w4Qty: displayTotals.w4Qty + batteryTotals.w4Qty + otherTotals.w4Qty,
+    totalW1Cost: displayTotals.w1Cost + batteryTotals.w1Cost + otherTotals.w1Cost,
+    totalW2Cost: displayTotals.w2Cost + batteryTotals.w2Cost + otherTotals.w2Cost,
+    totalW3Cost: displayTotals.w3Cost + batteryTotals.w3Cost + otherTotals.w3Cost,
+    totalW4Cost: displayTotals.w4Cost + batteryTotals.w4Cost + otherTotals.w4Cost,
+    w1Cost: displayTotals.w1Cost + batteryTotals.w1Cost + otherTotals.w1Cost,
+    w2Cost: displayTotals.w2Cost + batteryTotals.w2Cost + otherTotals.w2Cost,
+    w3Cost: displayTotals.w3Cost + batteryTotals.w3Cost + otherTotals.w3Cost,
+    w4Cost: displayTotals.w4Cost + batteryTotals.w4Cost + otherTotals.w4Cost
   };
+
+  const totalAllocatedAllParts = grandGroupTotals.totalAlloc;
+
+  const siteTotals = {};
   orderedServiceSites.forEach(s => {
-    grandGroupTotals.perSite[s.id] = (displayTotals.perSite[s.id] || 0) + (batteryTotals.perSite[s.id] || 0);
+    siteTotals[s.id] = (displayTotals.siteTotals[s.id] || 0) + (batteryTotals.siteTotals[s.id] || 0) + (otherTotals.siteTotals[s.id] || 0);
   });
 
-  // Compute site column totals & financial breakdowns
-  const totalAllocatedAllParts = grandGroupTotals.totalQty;
-  const siteTotals = grandGroupTotals.perSite;
-  
   const siteCostTotals = {};
   orderedServiceSites.forEach(s => {
     let sumCost = 0;
     filteredAllocations.forEach(item => {
-      const qty = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
       const part = parts.find(p => p.id === item.part_id || p.part_number === item.part_number);
-      const isDisplay = item.category_id === 'cat-display' || part?.category_id === 'cat-display' || item.description?.toLowerCase().includes('display');
-      const fallbackPrice = isDisplay ? 279 : 99;
+      const isDisp = item.category_id === 'cat-display' || item.description?.toLowerCase().includes('display');
+      const fallbackPrice = isDisp ? 279 : 99;
+      const qty = item.site_quantities?.[s.id] ?? item.site_quantities?.[s.code] ?? 0;
       const price = item.stocking_price || part?.stocking_price || fallbackPrice;
       sumCost += qty * price;
     });
@@ -180,8 +200,9 @@ export default function AllocationMatrix() {
       showToast('No allocations available to export', 'warning');
       return;
     }
-    await exportAllocationToExcel(filteredAllocations, orderedServiceSites, 'August 2026');
-    showToast('Exported Master Allocation with corporate colors and styles to Excel (.xlsx)', 'success');
+    const currentPeriodLabel = activePeriod?.label || 'September 2026';
+    await exportAllocationToExcel(filteredAllocations, orderedServiceSites, currentPeriodLabel);
+    showToast(`Exported Master Allocation (${currentPeriodLabel}) with corporate colors and styles to Excel (.xlsx)`, 'success');
   };
 
   const handleDownloadPDF = () => {
@@ -189,8 +210,9 @@ export default function AllocationMatrix() {
       showToast('No allocations available to export', 'warning');
       return;
     }
-    exportAllocationToPDF(filteredAllocations, orderedServiceSites, 'August 2026');
-    showToast('Exported Master Allocation Matrix to PDF', 'success');
+    const currentPeriodLabel = activePeriod?.label || 'September 2026';
+    exportAllocationToPDF(filteredAllocations, orderedServiceSites, currentPeriodLabel);
+    showToast(`Exported Master Allocation Matrix (${currentPeriodLabel}) to PDF`, 'success');
   };
 
   const handlePrint = () => {
@@ -198,7 +220,8 @@ export default function AllocationMatrix() {
       showToast('No allocations available to print', 'warning');
       return;
     }
-    printAllocationMatrixDirect(filteredAllocations, orderedServiceSites, 'August 2026');
+    const currentPeriodLabel = activePeriod?.label || 'September 2026';
+    printAllocationMatrixDirect(filteredAllocations, orderedServiceSites, currentPeriodLabel);
   };
 
   const renderItemRow = (item, commodityLabel, index, excelRowNumber = 3) => {

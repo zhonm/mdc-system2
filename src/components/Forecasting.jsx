@@ -12,12 +12,25 @@ export default function Forecasting() {
     selectedCategory,
     updateForecastOverride,
     setActiveTab,
-    showToast
+    showToast,
+    activePeriod
   } = useApp();
 
   const [showSaveModal, setShowSaveModal] = useState(false);
 
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul'];
+  const ALL_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  
+  let maxHistoryLength = 0;
+  forecastItems.forEach(item => {
+    if (Array.isArray(item.ytd_monthly_counts) && item.ytd_monthly_counts.length > 0) {
+      maxHistoryLength = Math.max(maxHistoryLength, item.ytd_monthly_counts.length);
+    }
+  });
+  if (maxHistoryLength === 0) {
+    maxHistoryLength = (activePeriod?.month ? activePeriod.month - 1 : 8) || 8;
+  }
+  const months = ALL_MONTH_NAMES.slice(0, maxHistoryLength);
+  const targetMonthShort = activePeriod?.label ? activePeriod.label.split(' ')[0].substring(0, 3) : 'Sep';
 
   // Filter items by category
   const filteredItems = forecastItems.filter(item => {
@@ -34,8 +47,9 @@ export default function Forecasting() {
       showToast('No forecast items to export', 'warning');
       return;
     }
-    await exportForecastToExcel(filteredItems, 'August 2026');
-    showToast('Exported August Forecast with styled Excel format', 'success');
+    const currentPeriodLabel = activePeriod?.label || 'September 2026';
+    await exportForecastToExcel(filteredItems, currentPeriodLabel);
+    showToast(`Exported ${currentPeriodLabel} Forecast with styled Excel format`, 'success');
   };
 
   const handlePrint = () => {
@@ -52,7 +66,7 @@ export default function Forecasting() {
       <div className="card" style={{ marginBottom: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           <div>
-            <h3>Demand Forecasting Engine</h3>
+            <h3>Demand Forecasting Engine ({activePeriod?.label || 'September 2026'})</h3>
             <p style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
               Linear regression ($y = \alpha + \beta x$) computed over historical repair counts
             </p>
@@ -142,7 +156,7 @@ export default function Forecasting() {
                 ))}
                 <th style={{ textAlign: 'center', background: '#f1f5f9' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                    <span>Aug Forecast</span>
+                    <span>{targetMonthShort} Forecast</span>
                     <TrendingUp size={13} color="var(--primary)" />
                   </div>
                 </th>
@@ -153,11 +167,11 @@ export default function Forecasting() {
             <tbody>
               {filteredItems.map(item => {
                 const rawCounts = item.ytd_monthly_counts || [];
-                const counts = rawCounts.slice(0, 7);
-                while (counts.length < 7) counts.push(0);
-                const computed = calculateLinearRegressionForecast(counts, 8);
+                const counts = months.map((_, idx) => rawCounts[idx] || 0);
+                const targetX = months.length + 1;
+                const computed = item.computed_forecast !== undefined ? item.computed_forecast : calculateLinearRegressionForecast(counts, targetX);
                 const hasOverride = item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== '';
-                const finalOrder = hasOverride ? parseInt(item.admin_override) : (item.final_forecast || computed);
+                const finalOrder = hasOverride ? parseInt(item.admin_override) : (item.final_forecast !== undefined ? item.final_forecast : computed);
 
                 return (
                   <tr key={item.part_id}>

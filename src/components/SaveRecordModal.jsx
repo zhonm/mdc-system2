@@ -28,12 +28,13 @@ export default function SaveRecordModal({
     forecastItems,
     allocations,
     sites,
-    savePeriodRecord
+    savePeriodRecord,
+    activePeriod
   } = useApp();
 
   const [recordType, setRecordType] = useState(defaultType);
-  const [periodYear, setPeriodYear] = useState(2026);
-  const [periodMonth, setPeriodMonth] = useState(8);
+  const [periodYear, setPeriodYear] = useState(activePeriod?.year || 2026);
+  const [periodMonth, setPeriodMonth] = useState(activePeriod?.month || 9);
   const [periodWeek, setPeriodWeek] = useState('');
   const [periodLabel, setPeriodLabel] = useState('');
   const [isLabelCustomized, setIsLabelCustomized] = useState(false);
@@ -46,7 +47,7 @@ export default function SaveRecordModal({
     if (!isOpen) return;
 
     if (!isLabelCustomized) {
-      const monthName = MONTH_NAMES[periodMonth - 1] || 'August';
+      const monthName = MONTH_NAMES[periodMonth - 1] || 'September';
       let suggested = `${monthName} ${periodYear}`;
       
       if (periodWeek) {
@@ -69,15 +70,15 @@ export default function SaveRecordModal({
   useEffect(() => {
     if (isOpen) {
       setRecordType(defaultType);
-      setPeriodYear(2026);
-      setPeriodMonth(8);
+      setPeriodYear(activePeriod?.year || 2026);
+      setPeriodMonth(activePeriod?.month || 9);
       setPeriodWeek('');
       setIsLabelCustomized(false);
       setNotes('');
       setErrorMsg('');
       setIsSubmitting(false);
     }
-  }, [isOpen, defaultType]);
+  }, [isOpen, defaultType, activePeriod]);
 
   if (!isOpen) return null;
 

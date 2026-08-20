@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { parseUniversalExcel, downloadSampleGsxFixablyCsv } from '../utils/excelParser';
 import {
@@ -27,16 +27,47 @@ import {
 } from 'lucide-react';
 
 export default function DataImport() {
-  const { applyParsedDataset, resetToDefaultData, clearAllData, sites, parts, currentUser, showToast } = useApp();
+  const { applyParsedDataset, resetToDefaultData, clearAllData, sites, parts, currentUser, showToast, activePeriod, setActivePeriod } = useApp();
   const [isProcessing, setIsProcessing] = useState(false);
   const [parsedData, setParsedData] = useState(null);
   const [fileName, setFileName] = useState('');
   const [lastFileObj, setLastFileObj] = useState(null);
-  const [filterScope, setFilterScope] = useState('IPHONE_13_PLUS_BATTERY_DISPLAY');
-  const [selectedMonth, setSelectedMonth] = useState('7'); // Default to August (Month index 7) or 'auto'
+  const [filterScope, setFilterScope] = useState(() => {
+    try {
+      return localStorage.getItem('mdc_filter_scope') || 'IPHONE_13_PLUS_BATTERY_DISPLAY';
+    } catch {
+      return 'IPHONE_13_PLUS_BATTERY_DISPLAY';
+    }
+  });
+
+  const MONTH_FULL_NAMES = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_selected_ingestion_month');
+      if (saved !== null && saved !== undefined && saved !== '') return saved;
+      if (activePeriod?.month) return String(activePeriod.month - 1);
+    } catch (e) {}
+    return '8'; // Default to September
+  });
+
   const [previewTab, setPreviewTab] = useState('forecast'); // 'forecast' | 'allocation' | 'raw'
 
   const isSuperAdmin = currentUser?.role === 'superadmin';
+
+  // Sync selectedMonth when activePeriod changes from loading records or dataset
+  useEffect(() => {
+    if (activePeriod?.month) {
+      const targetIdx = String(activePeriod.month - 1);
+      setSelectedMonth(targetIdx);
+      try {
+        localStorage.setItem('mdc_selected_ingestion_month', targetIdx);
+      } catch (e) {}
+    }
+  }, [activePeriod?.month]);
 
   const handleFileUpload = async (e) => {
     if (!isSuperAdmin) {
@@ -76,6 +107,9 @@ export default function DataImport() {
 
   const handleScopeChange = async (newScope) => {
     setFilterScope(newScope);
+    try {
+      localStorage.setItem('mdc_filter_scope', newScope);
+    } catch (e) {}
     if (lastFileObj) {
       await processFile(lastFileObj, newScope, selectedMonth);
     }
@@ -83,6 +117,26 @@ export default function DataImport() {
 
   const handleMonthChange = async (newMonth) => {
     setSelectedMonth(newMonth);
+    try {
+      localStorage.setItem('mdc_selected_ingestion_month', newMonth);
+    } catch (e) {}
+
+    // If user explicitly chooses a specific month, also update global activePeriod so Header and other views immediately match
+    if (newMonth !== 'auto') {
+      const mIdx = parseInt(newMonth, 10);
+      if (!isNaN(mIdx) && mIdx >= 0 && mIdx <= 11) {
+        const newPeriod = {
+          month: mIdx + 1,
+          year: 2026,
+          label: `${MONTH_FULL_NAMES[mIdx]} 2026`
+        };
+        setActivePeriod(newPeriod);
+        try {
+          localStorage.setItem('mdc_active_period', JSON.stringify(newPeriod));
+        } catch (e) {}
+      }
+    }
+
     if (lastFileObj) {
       await processFile(lastFileObj, filterScope, newMonth);
     }
@@ -100,13 +154,29 @@ export default function DataImport() {
     const partsCount = parsedData.payload?.allocations?.length || parsedData.summary?.partsCount || 0;
     const sitesCount = parsedData.payload?.sites?.length || parsedData.summary?.sitesCount || 26;
 
+    let targetMonthName = 'September 2026';
+    let periodMonth = 9;
+    let periodYear = 2026;
+
+    if (selectedMonth !== 'auto') {
+      const idx = parseInt(selectedMonth, 10);
+      targetMonthName = `${MONTH_FULL_NAMES[idx]} 2026`;
+      periodMonth = idx + 1;
+    } else if (parsedData.detectedPeriod) {
+      targetMonthName = parsedData.detectedPeriod.label;
+      periodMonth = parsedData.detectedPeriod.month;
+      periodYear = parsedData.detectedPeriod.year;
+    }
+
     const auditMeta = {
       id: `log-import-${Date.now()}`,
       timestamp: new Date().toISOString(),
       action_type: 'FILE_IMPORT_APPLIED',
       file_name: fileName || lastFileObj?.name || 'Uploaded Dataset.xlsx',
       file_type: parsedData.type,
-      target_month: selectedMonth === '7' ? 'August 2026' : (selectedMonth === 'auto' ? 'Auto Period' : `Month ${selectedMonth}`),
+      target_month: targetMonthName,
+      period_month: periodMonth,
+      period_year: periodYear,
       filter_scope: filterScope,
       total_forecast_units: parsedData.summary?.totalForecastedUnits || totalAllocUnits,
       total_allocated_units: totalAllocUnits,
@@ -117,7 +187,7 @@ export default function DataImport() {
       user_name: currentUser?.fullName || 'Superadmin User',
       user_email: currentUser?.email || 'superadmin@mobilecare.com',
       user_role: currentUser?.role || 'superadmin',
-      status: 'VERIFIED_APPLIED'
+      status: 'ACTIVE_ON_CLOUD'
     };
 
     await applyParsedDataset(parsedData, auditMeta);
@@ -243,7 +313,7 @@ export default function DataImport() {
               <option value="4">May (May)</option>
               <option value="5">June (Jun)</option>
               <option value="6">July (Jul)</option>
-              <option value="7">August (Aug) — Active Planning Period</option>
+              <option value="7">August (Aug)</option>
               <option value="8">September (Sep)</option>
               <option value="9">October (Oct)</option>
               <option value="10">November (Nov)</option>
@@ -452,8 +522,8 @@ export default function DataImport() {
                   <tr>
                     <th>Part Number</th>
                     <th>Description</th>
-                    <th style={{ textAlign: 'center' }}>Monthly Trend (Jan-Aug)</th>
-                    <th style={{ textAlign: 'center' }}>August Demand</th>
+                    <th style={{ textAlign: 'center' }}>Monthly Trend</th>
+                    <th style={{ textAlign: 'center' }}>{parsedData.detectedPeriod?.label ? `${parsedData.detectedPeriod.label.split(' ')[0]} Forecast` : (selectedMonth !== 'auto' ? `${MONTH_FULL_NAMES[parseInt(selectedMonth)]} Forecast` : 'Forecast Demand')}</th>
                     <th style={{ textAlign: 'center' }}>Safety Stock (5%)</th>
                     <th style={{ textAlign: 'center', background: '#ecfdf5', color: '#065f46' }}>Recommended Order</th>
                   </tr>

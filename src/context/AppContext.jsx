@@ -1008,26 +1008,48 @@ export function AppProvider({ children }) {
       }
       return [
         {
-          id: 'log-august-2026-masterlist',
-          timestamp: '2026-08-18T07:20:00.000Z',
+          id: 'log-september-2026-masterlist',
+          timestamp: new Date().toISOString(),
           action_type: 'FILE_IMPORT_APPLIED',
-          file_name: 'Battery & Display (Allocation) - August 2026.xlsx',
+          file_name: 'Battery & Display (Allocation) - September 2026.xlsx',
           file_type: 'WORKBOOK_BUNDLE',
-          target_month: 'August 2026',
-          total_forecast_units: 461,
-          total_allocated_units: 461,
-          total_master_cost: 72659,
-          parts_count: 39,
+          target_month: 'September 2026',
+          total_forecast_units: 591,
+          total_allocated_units: 591,
+          total_master_cost: 91199,
+          parts_count: 40,
           sites_count: 26,
           user_id: 'usr-superadmin-01',
           user_name: 'Zhon Manaois',
           user_email: 'zhonmanaois@gmail.com',
           user_role: 'superadmin',
-          status: 'VERIFIED_APPLIED'
+          status: 'ACTIVE_ON_CLOUD'
         }
       ];
     } catch {
       return [];
+    }
+  });
+
+  // Current Active Planning Period (e.g. September 2026)
+  const [activePeriod, setActivePeriod] = useState(() => {
+    try {
+      const saved = localStorage.getItem('mdc_active_period');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.label) return parsed;
+      }
+      return {
+        month: 9,
+        year: 2026,
+        label: 'September 2026'
+      };
+    } catch {
+      return {
+        month: 9,
+        year: 2026,
+        label: 'September 2026'
+      };
     }
   });
 
@@ -1055,7 +1077,9 @@ export function AppProvider({ children }) {
           savedRepairs,
           savedRecs,
           savedTransfers,
-          savedTransferMeta
+          savedTransferMeta,
+          savedUploadLogs,
+          savedActivePeriod
         ] = await Promise.all([
           dbStorage.getItem('mdc_forecast'),
           dbStorage.getItem('mdc_allocations'),
@@ -1070,7 +1094,8 @@ export function AppProvider({ children }) {
           dbStorage.getAllSavedRecords(),
           dbStorage.getItem('mdc_stock_transfer_reports'),
           dbStorage.getItem('mdc_stock_transfer_metadata'),
-          dbStorage.getItem('mdc_upload_audit_logs')
+          dbStorage.getItem('mdc_upload_audit_logs'),
+          dbStorage.getItem('mdc_active_period')
         ]);
 
         if (!isMounted) return;
@@ -1102,6 +1127,7 @@ export function AppProvider({ children }) {
         if (Array.isArray(savedTransfers) && savedTransfers.length > 0) setStockTransferReports(savedTransfers);
         if (savedTransferMeta) setStockTransferMetadata(savedTransferMeta);
         if (Array.isArray(savedUploadLogs) && savedUploadLogs.length > 0) setUploadAuditLogs(savedUploadLogs);
+        if (savedActivePeriod && savedActivePeriod.label) setActivePeriod(savedActivePeriod);
       } catch (err) {
         console.warn('[IndexedDB] Hydration notice:', err);
       }
@@ -1126,10 +1152,12 @@ export function AppProvider({ children }) {
     dbStorage.setItem('mdc_stock_transfer_reports', stockTransferReports || []);
     dbStorage.setItem('mdc_stock_transfer_metadata', stockTransferMetadata);
     dbStorage.setItem('mdc_upload_audit_logs', uploadAuditLogs || []);
+    dbStorage.setItem('mdc_active_period', activePeriod);
     try {
       localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(uploadAuditLogs || []));
+      localStorage.setItem('mdc_active_period', JSON.stringify(activePeriod));
     } catch (e) {}
-  }, [categories, sites, parts, forecastItems, allocations, inventoryUnits, purchaseOrders, shipments, scanLogs, repairUsageRecords, stockTransferReports, stockTransferMetadata, uploadAuditLogs]);
+  }, [categories, sites, parts, forecastItems, allocations, inventoryUnits, purchaseOrders, shipments, scanLogs, repairUsageRecords, stockTransferReports, stockTransferMetadata, uploadAuditLogs, activePeriod]);
 
   // Top-level Supabase Hydration function
   const hydrateFromSupabase = async () => {
@@ -1489,32 +1517,51 @@ export function AppProvider({ children }) {
         localStorage.removeItem('mdc_is_cleared');
       } catch (e) {}
 
-      // Record Audit Log for file ingestion
-      const uploadLogEntry = auditMeta || {
+      const resolvedTargetMonth = auditMeta?.target_month || dataset.detectedPeriod?.label || 'September 2026';
+      const resolvedPeriodMonth = auditMeta?.period_month || dataset.detectedPeriod?.month || 9;
+      const resolvedPeriodYear = auditMeta?.period_year || dataset.detectedPeriod?.year || 2026;
+
+      const newPeriod = {
+        month: resolvedPeriodMonth,
+        year: resolvedPeriodYear,
+        label: resolvedTargetMonth
+      };
+      setActivePeriod(newPeriod);
+      dbStorage.setItem('mdc_active_period', newPeriod);
+      try { localStorage.setItem('mdc_active_period', JSON.stringify(newPeriod)); } catch (e) {}
+
+      // Record Audit Log for file ingestion (Mark as ACTIVE_ON_CLOUD and supersede previous uploads)
+      const uploadLogEntry = auditMeta ? {
+        ...auditMeta,
+        target_month: resolvedTargetMonth,
+        status: 'ACTIVE_ON_CLOUD'
+      } : {
         id: `log-import-${Date.now()}`,
         timestamp: new Date().toISOString(),
         action_type: 'FILE_IMPORT_APPLIED',
         file_name: sheetName || 'Uploaded Dataset',
         file_type: type,
-        target_month: 'August 2026',
-        total_forecast_units: payload.allocations?.reduce((s, a) => s + (a.total_allocated_qty || 0), 0) || 461,
-        total_allocated_units: payload.allocations?.reduce((s, a) => s + (a.total_allocated_qty || 0), 0) || 461,
-        total_master_cost: payload.allocations?.reduce((s, a) => s + (a.total_stock_cost || 0), 0) || 72659,
-        parts_count: payload.allocations?.length || payload.forecastItems?.length || 39,
+        target_month: resolvedTargetMonth,
+        total_forecast_units: payload.allocations?.reduce((s, a) => s + (a.total_allocated_qty || 0), 0) || 591,
+        total_allocated_units: payload.allocations?.reduce((s, a) => s + (a.total_allocated_qty || 0), 0) || 591,
+        total_master_cost: payload.allocations?.reduce((s, a) => s + (a.total_stock_cost || 0), 0) || 91199,
+        parts_count: payload.allocations?.length || payload.forecastItems?.length || 40,
         sites_count: payload.sites?.length || 26,
         user_id: currentUser?.id || 'usr-superadmin',
         user_name: currentUser?.fullName || 'Superadmin User',
         user_email: currentUser?.email || 'superadmin@mobilecare.com',
         user_role: currentUser?.role || 'superadmin',
-        status: 'VERIFIED_APPLIED'
+        status: 'ACTIVE_ON_CLOUD'
       };
 
-      setUploadAuditLogs(prev => {
-        const next = [uploadLogEntry, ...(prev || [])];
-        dbStorage.setItem('mdc_upload_audit_logs', next);
-        try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(next)); } catch (e) {}
-        return next;
-      });
+      const updatedAuditLogs = [
+        uploadLogEntry,
+        ...(uploadAuditLogs || []).map(l => ({ ...l, status: 'SUPERSEDED' }))
+      ];
+
+      setUploadAuditLogs(updatedAuditLogs);
+      dbStorage.setItem('mdc_upload_audit_logs', updatedAuditLogs);
+      try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(updatedAuditLogs)); } catch (e) {}
 
       if (type === 'WORKBOOK_BUNDLE') {
         if (payload.sites && payload.sites.length > 0) {
@@ -1672,7 +1719,7 @@ export function AppProvider({ children }) {
         allocations: payload.allocations || allocations,
         parts: payload.parts || parts,
         sites: payload.sites || sites,
-        uploadAuditLogs: [uploadLogEntry, ...(uploadAuditLogs || [])]
+        uploadAuditLogs: updatedAuditLogs
       };
       await syncAllDataToCloud(fullSyncSnapshot);
     } catch (err) {
@@ -2766,9 +2813,9 @@ export function AppProvider({ children }) {
         const liveSnapshotPayload = {
           id: LIVE_MASTER_RECORD_ID,
           record_type: 'both',
-          period_label: 'August 2026 Live Master State',
-          period_year: 2026,
-          period_month: 8,
+          period_label: `${activePeriod?.label || 'September 2026'} Live Master State`,
+          period_year: activePeriod?.year || 2026,
+          period_month: activePeriod?.month || 9,
           saved_by_name: currentUser?.fullName || 'Superadmin User',
           saved_by_user_id: null,
           notes: 'Real-time multi-user synchronized Distribution Center state',
@@ -2847,10 +2894,10 @@ export function AppProvider({ children }) {
           const { data: dbCycle } = await supabase
             .from('forecast_cycles')
             .upsert({
-              period_year: 2026,
-              period_month: 8,
+              period_year: activePeriod?.year || 2026,
+              period_month: activePeriod?.month || 9,
               status: 'active',
-              notes: 'August 2026 Demand Forecast Cycle'
+              notes: `${activePeriod?.label || 'September 2026'} Demand Forecast Cycle`
             }, { onConflict: 'period_year,period_month' })
             .select('id')
             .maybeSingle();
@@ -2888,8 +2935,8 @@ export function AppProvider({ children }) {
           const { data: dbAllocCycle } = await supabase
             .from('allocation_cycles')
             .upsert({
-              period_year: 2026,
-              period_month: 8,
+              period_year: activePeriod?.year || 2026,
+              period_month: activePeriod?.month || 9,
               status: 'approved'
             })
             .select('id')
@@ -3146,6 +3193,17 @@ export function AppProvider({ children }) {
       restoredCountDesc.push(`${snap.allocations.length} allocations`);
     }
 
+    if (record.period_month || record.period_year || record.period_label) {
+      const restoredPeriod = {
+        month: record.period_month || 9,
+        year: record.period_year || 2026,
+        label: record.period_label || `Period ${record.period_month || 9} ${record.period_year || 2026}`
+      };
+      setActivePeriod(restoredPeriod);
+      dbStorage.setItem('mdc_active_period', restoredPeriod);
+      try { localStorage.setItem('mdc_active_period', JSON.stringify(restoredPeriod)); } catch (e) {}
+    }
+
     const descStr = restoredCountDesc.length > 0 ? ` (${restoredCountDesc.join(', ')})` : '';
     showToast(`Loaded record "${record.period_label}" into live working tables${descStr}!`, 'success');
 
@@ -3226,6 +3284,8 @@ export function AppProvider({ children }) {
         setSearchQuery,
         toast,
         showToast,
+        activePeriod,
+        setActivePeriod,
         // Auth & RBAC
         currentUser,
         usersList,

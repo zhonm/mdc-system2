@@ -13,7 +13,8 @@ export default function Header() {
     setSearchQuery,
     syncAllDataToCloud,
     refreshDataFromCloud,
-    showToast
+    showToast,
+    activePeriod
   } = useApp();
 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -56,7 +57,7 @@ export default function Header() {
             {tabTitles[activeTab] || 'DC System'}
           </h1>
           <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Period: August 2026 • Mobile Care Services Phils. Inc.
+            Period: {activePeriod?.label || 'September 2026'} • Mobile Care Services Phils. Inc.
           </span>
         </div>
 

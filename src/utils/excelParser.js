@@ -331,11 +331,30 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           wb = XLSX.read(data, { type: 'array' });
         }
 
-        const sheetNames = wb.SheetNames;
+        const sheetNames = wb.SheetNames || [];
+        const ALL_MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        let detectedMonthIdx = 8; // Default to September (Month index 8, 9th month)
+
+        if (selectedMonth !== 'auto' && selectedMonth !== undefined && selectedMonth !== '') {
+          const parsedM = parseInt(selectedMonth, 10);
+          detectedMonthIdx = Math.max(0, Math.min(11, isNaN(parsedM) ? 8 : parsedM));
+        } else {
+          const nameToSearch = `${file.name} ${sheetNames.join(' ')}`.toLowerCase();
+          const fIdx = ALL_MONTH_NAMES.findIndex(m => nameToSearch.includes(m.toLowerCase()));
+          if (fIdx >= 0) {
+            detectedMonthIdx = fIdx;
+          }
+        }
+
+        const detectedPeriod = {
+          month: detectedMonthIdx + 1,
+          year: 2026,
+          label: `${ALL_MONTH_NAMES[detectedMonthIdx]} 2026`
+        };
 
         // Check for Multi-Tab Comprehensive Workbook (.xlsx)
         const allocSheetName = !isCsv ? sheetNames.find(s =>
-          (/master.*alloc|allocation|_alloc/i.test(s) || /july.*alloc|august.*alloc/i.test(s)) && !/forecasting|forecast/i.test(s)
+          (/master.*alloc|allocation|_alloc/i.test(s) || /july.*alloc|august.*alloc|september.*alloc/i.test(s)) && !/forecasting|forecast/i.test(s)
         ) : null;
 
         const forecastSheetName = !isCsv ? sheetNames.find(s =>
@@ -357,6 +376,25 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             const wsForecast = wb.Sheets[forecastSheetName];
             const rawForecastRows = XLSX.utils.sheet_to_json(wsForecast, { header: 1, defval: '' });
             parsedForecast = parseForecastingSheet(rawForecastRows, filterScope);
+            if (parsedAlloc.allocations.length > 0) {
+              const fcastMap = new Map(parsedForecast.forecastItems.map(f => [f.part_number, f]));
+              parsedForecast.forecastItems = parsedAlloc.allocations.map(a => {
+                const f = fcastMap.get(a.part_number);
+                const targetUnits = a.forecasted_qty || a.total_allocated_qty;
+                return {
+                  part_id: a.part_id,
+                  part_number: a.part_number,
+                  description: a.description,
+                  category_id: a.category_id,
+                  ytd_monthly_counts: f?.ytd_monthly_counts || [],
+                  computed_forecast: targetUnits,
+                  admin_override: null,
+                  final_forecast: targetUnits,
+                  safety_stock_units: Math.ceil(targetUnits * 0.05),
+                  recommended_order: targetUnits + Math.ceil(targetUnits * 0.05)
+                };
+              });
+            }
           } else {
             // Build fallback forecast items from allocation data
             parsedForecast.forecastItems = parsedAlloc.allocations.map(a => ({
@@ -366,8 +404,9 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
               category_id: a.category_id,
               computed_forecast: a.forecasted_qty || a.total_allocated_qty,
               final_forecast: a.forecasted_qty || a.total_allocated_qty,
-              safety_stock_units: 0,
-              recommended_order: a.forecasted_qty || a.total_allocated_qty
+              safety_stock_units: Math.ceil((a.forecasted_qty || a.total_allocated_qty) * 0.05),
+              recommended_order: (a.forecasted_qty || a.total_allocated_qty) + Math.ceil((a.forecasted_qty || a.total_allocated_qty) * 0.05),
+              ytd_monthly_counts: []
             }));
           }
 
@@ -375,6 +414,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             success: true,
             type: 'WORKBOOK_BUNDLE',
             sheetName: forecastSheetName ? `${forecastSheetName} + ${allocSheetName}` : allocSheetName,
+            detectedPeriod,
             summary: {
               forecastPartsCount: parsedForecast.forecastItems.length,
               allocPartsCount: parsedAlloc.allocations.length,
@@ -466,12 +506,12 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
                 totalCount += count;
                 return count;
               });
-              return countsPerSite.map(count => totalCount > 0 ? (count / totalCount) : 0);
+              return countsPerSite.map(count => totalCount > 0 ? (count / totalCount) : (1 / activeServiceSites.length));
             });
           }
 
-          const dispShares = canonicalShares?.displayShares || buildCatShares(CANONICAL_DISPLAY_DESCS);
-          const battShares = canonicalShares?.batteryShares || buildCatShares(CANONICAL_BATTERY_SHARE_DESCS);
+          const dispShares = siteCountsPerDesc.size > 0 ? buildCatShares(CANONICAL_DISPLAY_DESCS) : (canonicalShares?.displayShares || CANONICAL_DISPLAY_DESCS.map(() => activeServiceSites.map(() => 1 / activeServiceSites.length)));
+          const battShares = siteCountsPerDesc.size > 0 ? buildCatShares(CANONICAL_BATTERY_SHARE_DESCS) : (canonicalShares?.batteryShares || CANONICAL_BATTERY_SHARE_DESCS.map(() => activeServiceSites.map(() => 1 / activeServiceSites.length)));
 
           const generatedAllocations = [];
           let curRow = 3;
@@ -486,10 +526,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
               computed_forecast: 0,
               final_forecast: 0
             };
-            let targetQty = f.final_forecast || f.computed_forecast || 0;
-            if (CANONICAL_AUGUST_2026_FORECASTS[desc] !== undefined && targetQty === 0) {
-              targetQty = CANONICAL_AUGUST_2026_FORECASTS[desc];
-            }
+            const targetQty = f.final_forecast || f.computed_forecast || 0;
             const allocatedBranchQuantities = calculate2DCumulativeAllocation(targetQty, dispShares, mIdx);
             const siteQuantities = {};
             let totalAlloc = 0;
@@ -579,6 +616,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             success: true,
             type: 'WORKBOOK_BUNDLE',
             sheetName: rawSheetName ? `${forecastSheetName} + ${rawSheetName}` : forecastSheetName,
+            detectedPeriod,
             summary: {
               forecastPartsCount: parsedForecast.forecastItems.length,
               allocPartsCount: generatedAllocations.length,
@@ -594,26 +632,42 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
             }
           });
           return;
-          return;
         }
 
         // C. Single Sheet or CSV Inspection
         const firstWs = wb.Sheets[sheetNames[0]];
         const rawRows = XLSX.utils.sheet_to_json(firstWs, { header: 1, defval: '' });
 
-        // 1. Is it a Pre-Aggregated Allocation Matrix Sheet?
+        // 1. Is it a Pre-Aggregated Allocation Matrix Sheet or Allocation CSV?
         if (isAllocationMatrixSheet(rawRows)) {
           const parsedAlloc = parseAllocationSheet(rawRows, currentSites, filterScope);
+          const fallbackForecastItems = parsedAlloc.allocations.map(a => ({
+            part_id: a.part_id,
+            part_number: a.part_number,
+            description: a.description,
+            category_id: a.category_id,
+            computed_forecast: a.forecasted_qty || a.total_allocated_qty,
+            final_forecast: a.forecasted_qty || a.total_allocated_qty,
+            safety_stock_units: Math.ceil((a.forecasted_qty || a.total_allocated_qty) * 0.05),
+            recommended_order: (a.forecasted_qty || a.total_allocated_qty) + Math.ceil((a.forecasted_qty || a.total_allocated_qty) * 0.05),
+            ytd_monthly_counts: []
+          }));
+
           resolve({
             success: true,
             type: 'ALLOCATION',
             sheetName: sheetNames[0],
+            detectedPeriod,
             summary: {
               partsCount: parsedAlloc.allocations.length,
               sitesCount: parsedAlloc.sites.length,
+              totalForecastedUnits: parsedAlloc.allocations.reduce((acc, a) => acc + (a.total_allocated_qty || 0), 0),
               description: `Extracted ${parsedAlloc.allocations.length} allocated parts across ${parsedAlloc.sites.length} service sites from "${sheetNames[0]}".`
             },
-            payload: parsedAlloc
+            payload: {
+              ...parsedAlloc,
+              forecastItems: fallbackForecastItems
+            }
           });
           return;
         }
@@ -759,6 +813,7 @@ export async function parseUniversalExcel(file, currentSites = [], currentParts 
           success: true,
           type: 'RAW_USAGE_PIPELINE',
           sheetName: sheetNames[0],
+          detectedPeriod: usageResult.detectedPeriod || detectedPeriod,
           summary: {
             recordsCount: usageResult.records.length,
             partsCount: usageResult.forecastItems.length,
@@ -786,6 +841,9 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
   const forecastItems = [];
   const parts = [];
 
+  const ALL_MONTH_KEYS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+  const FULL_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
   // Find the header row containing month names
   let headerRowIndex = 0;
   for (let r = 0; r < Math.min(8, rawRows.length); r++) {
@@ -803,7 +861,18 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
   const isDualTable = (rowStr.match(/january|jan/g) || []).length >= 2 || rawRows.some(r => (r[0] === 'Battery' || r[11] === 'Display'));
 
   if (isDualTable) {
-    // Dual side-by-side parser
+    // Find dual month columns
+    const leftMonthCols = [];
+    const rightMonthCols = [];
+    headerRow.forEach((h, colIdx) => {
+      const hStr = String(h || '').trim().toLowerCase();
+      const mIdx = ALL_MONTH_KEYS.findIndex(m => hStr.startsWith(m));
+      if (mIdx >= 0) {
+        if (colIdx < 11) leftMonthCols.push({ colIdx, monthIdx: mIdx, name: FULL_MONTHS[mIdx] });
+        else rightMonthCols.push({ colIdx, monthIdx: mIdx, name: FULL_MONTHS[mIdx] });
+      }
+    });
+
     for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
       const row = rawRows[r];
       if (!row || row.length === 0) continue;
@@ -812,22 +881,29 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
       const pnBat = String(row[0] || '').trim();
       const descBat = String(row[1] || '').trim();
       if (pnBat && descBat && isTargetIPhonePart(descBat, pnBat, filterScope)) {
-        const counts = [];
-        for (let c = 2; c <= 9; c++) {
-          counts.push(parseInt(row[c]) || 0);
+        const rawVals = leftMonthCols.map(mc => parseInt(row[mc.colIdx]) || 0);
+        let targetValue = 0;
+        let historyCounts = [];
+        if (rawVals.length > 0) {
+          if (rawVals.length > 7) {
+            historyCounts = rawVals.slice(0, rawVals.length - 1);
+            targetValue = rawVals[rawVals.length - 1] > 0 ? rawVals[rawVals.length - 1] : calculateLinearRegressionForecast(historyCounts, historyCounts.length + 1);
+          } else {
+            historyCounts = rawVals;
+            targetValue = calculateLinearRegressionForecast(historyCounts, historyCounts.length + 1);
+          }
         }
-        const augustValue = counts[7] !== undefined ? counts[7] : calculateLinearRegressionForecast(counts);
-        const rec = calculateRecommendedOrder(augustValue, 0.05);
+        const rec = calculateRecommendedOrder(targetValue, 0.05);
 
         forecastItems.push({
           part_id: `part-${pnBat}`,
           part_number: pnBat,
           description: descBat,
           category_id: 'cat-battery',
-          ytd_monthly_counts: counts,
-          computed_forecast: augustValue,
+          ytd_monthly_counts: historyCounts,
+          computed_forecast: targetValue,
           admin_override: null,
-          final_forecast: augustValue,
+          final_forecast: targetValue,
           safety_stock_units: rec.safetyUnits,
           recommended_order: rec.recommendedOrder
         });
@@ -847,22 +923,29 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
       const pnDisp = String(row[11] || '').trim();
       const descDisp = String(row[12] || '').trim();
       if (pnDisp && descDisp && isTargetIPhonePart(descDisp, pnDisp, filterScope)) {
-        const counts = [];
-        for (let c = 13; c <= 20; c++) {
-          counts.push(parseInt(row[c]) || 0);
+        const rawVals = rightMonthCols.map(mc => parseInt(row[mc.colIdx]) || 0);
+        let targetValue = 0;
+        let historyCounts = [];
+        if (rawVals.length > 0) {
+          if (rawVals.length > 7) {
+            historyCounts = rawVals.slice(0, rawVals.length - 1);
+            targetValue = rawVals[rawVals.length - 1] > 0 ? rawVals[rawVals.length - 1] : calculateLinearRegressionForecast(historyCounts, historyCounts.length + 1);
+          } else {
+            historyCounts = rawVals;
+            targetValue = calculateLinearRegressionForecast(historyCounts, historyCounts.length + 1);
+          }
         }
-        const augustValue = counts[7] !== undefined ? counts[7] : calculateLinearRegressionForecast(counts);
-        const rec = calculateRecommendedOrder(augustValue, 0.05);
+        const rec = calculateRecommendedOrder(targetValue, 0.05);
 
         forecastItems.push({
           part_id: `part-${pnDisp}`,
           part_number: pnDisp,
           description: descDisp,
           category_id: 'cat-display',
-          ytd_monthly_counts: counts,
-          computed_forecast: augustValue,
+          ytd_monthly_counts: historyCounts,
+          computed_forecast: targetValue,
           admin_override: null,
-          final_forecast: augustValue,
+          final_forecast: targetValue,
           safety_stock_units: rec.safetyUnits,
           recommended_order: rec.recommendedOrder
         });
@@ -879,15 +962,18 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
       }
     }
   } else {
-    // Single Table parser
-    const pnCol = headerRow.findIndex(h => /part\s*number|p\/n|part\s*#/i.test(String(h))) || 0;
-    const descCol = headerRow.findIndex(h => /description|desc|part\s*name/i.test(String(h))) || 1;
-    
-    // Month column indices
+    // Single Table parser (e.g. Battery & Display Forecasting stacked tables)
+    const pnCol = headerRow.findIndex(h => /part\s*number|p\/n|part\s*#/i.test(String(h))) >= 0 ? headerRow.findIndex(h => /part\s*number|p\/n|part\s*#/i.test(String(h))) : 0;
+    const descCol = headerRow.findIndex(h => /description|desc|part\s*name/i.test(String(h))) >= 0 ? headerRow.findIndex(h => /description|desc|part\s*name/i.test(String(h))) : 1;
+
+    // Detect all month columns
     const monthCols = [];
-    ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug'].forEach(m => {
-      const idx = headerRow.findIndex(h => String(h).toLowerCase().startsWith(m));
-      if (idx >= 0) monthCols.push(idx);
+    headerRow.forEach((h, colIdx) => {
+      const hStr = String(h || '').trim().toLowerCase();
+      const mIdx = ALL_MONTH_KEYS.findIndex(m => hStr.startsWith(m));
+      if (mIdx >= 0 && colIdx !== pnCol && colIdx !== descCol) {
+        monthCols.push({ colIdx, monthIdx: mIdx, name: FULL_MONTHS[mIdx] });
+      }
     });
 
     for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
@@ -900,23 +986,35 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
 
       if (!isTargetIPhonePart(desc, pn, filterScope)) continue;
 
-      const counts = monthCols.map(c => parseInt(row[c]) || 0);
-      while (counts.length < 8) counts.push(0);
+      const rawVals = monthCols.map(mc => parseInt(row[mc.colIdx]) || 0);
+      let targetValue = 0;
+      let historyCounts = [];
 
-      const isDisplay = desc.toLowerCase().includes('display');
+      if (rawVals.length > 0) {
+        // If sheet has a projected target month column (e.g. September, which is 9th column after Jan-Aug)
+        if (rawVals.length > 7) {
+          historyCounts = rawVals.slice(0, rawVals.length - 1);
+          const sheetTargetVal = rawVals[rawVals.length - 1];
+          targetValue = sheetTargetVal !== undefined ? sheetTargetVal : calculateLinearRegressionForecast(historyCounts, historyCounts.length + 1);
+        } else {
+          historyCounts = rawVals;
+          targetValue = calculateLinearRegressionForecast(historyCounts, historyCounts.length + 1);
+        }
+      }
+
+      const isDisplay = desc.toLowerCase().includes('display') || desc.toLowerCase().includes('screen');
       const catId = isDisplay ? 'cat-display' : 'cat-battery';
-      const augustValue = counts[7] > 0 ? counts[7] : calculateLinearRegressionForecast(counts);
-      const rec = calculateRecommendedOrder(augustValue, 0.05);
+      const rec = calculateRecommendedOrder(targetValue, 0.05);
 
       forecastItems.push({
         part_id: `part-${pn}`,
         part_number: pn,
         description: desc,
         category_id: catId,
-        ytd_monthly_counts: counts,
-        computed_forecast: augustValue,
+        ytd_monthly_counts: historyCounts,
+        computed_forecast: targetValue,
         admin_override: null,
-        final_forecast: augustValue,
+        final_forecast: targetValue,
         safety_stock_units: rec.safetyUnits,
         recommended_order: rec.recommendedOrder
       });
@@ -927,7 +1025,7 @@ export function parseForecastingSheet(rawRows, filterScope = 'IPHONE_13_PLUS_BAT
         description: desc,
         category_id: catId,
         iphone_model: desc.replace(/^(Battery|Display),?\s*/i, ''),
-        stocking_price: isDisplay ? 280 : 150,
+        stocking_price: isDisplay ? 279 : 99,
         is_active: true
       });
     }
@@ -1161,9 +1259,10 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     return null;
   }
 
-  let targetMonthIdx = 7; // August default (8th month, index 7)
+  let targetMonthIdx = 8; // Default to September (9th month, index 8)
   if (selectedMonth !== 'auto' && selectedMonth !== undefined && selectedMonth !== '') {
-    targetMonthIdx = Math.max(0, Math.min(11, parseInt(selectedMonth) || 7));
+    const parsedM = parseInt(selectedMonth, 10);
+    targetMonthIdx = Math.max(0, Math.min(11, isNaN(parsedM) ? 8 : parsedM));
   } else if (fileName) {
     const fLower = fileName.toLowerCase();
     const foundIdx = MONTH_NAMES.findIndex(m => fLower.includes(m.toLowerCase()));
@@ -1172,6 +1271,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
   let defaultFileMonthIdx = targetMonthIdx;
 
   const validRepairs = [];
+  const rawRepairRows = [];
 
   for (let r = headerIndex + 1; r < rawRows.length; r++) {
     const row = rawRows[r];
@@ -1221,7 +1321,7 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     const isDisplay = cleanDesc.toLowerCase().includes('display') || cleanDesc.toLowerCase().includes('screen');
     const catId = isDisplay ? 'cat-display' : 'cat-battery';
 
-    records.push({
+    rawRepairRows.push({
       repairNumber: repairNo,
       closedDate: typeof rawMonth === 'number' ? MONTH_NAMES[monthIdx] : (String(rawMonth) || MONTH_NAMES[monthIdx]),
       monthIndex: monthIdx,
@@ -1231,36 +1331,62 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       rawSiteName: rawSite,
       quantity: rawQty,
       serialNumber: serial,
-      category_id: catId
+      category_id: catId,
+      matchedSite
+    });
+  }
+
+  // If auto-detecting and file has multi-month repairs, target month is max month + 1
+  if (selectedMonth === 'auto' && rawRepairRows.length > 0 && (!fileName || !MONTH_NAMES.some(m => fileName.toLowerCase().includes(m.toLowerCase())))) {
+    const maxM = Math.max(...rawRepairRows.map(r => r.monthIndex));
+    if (maxM >= 0) {
+      targetMonthIdx = Math.min(11, maxM + 1);
+    }
+  }
+
+  const historyLength = Math.max(1, targetMonthIdx);
+
+  rawRepairRows.forEach(item => {
+    records.push({
+      repairNumber: item.repairNumber,
+      closedDate: item.closedDate,
+      monthIndex: item.monthIndex,
+      partNumber: item.partNumber,
+      description: item.description,
+      siteId: item.siteId,
+      rawSiteName: item.rawSiteName,
+      quantity: item.quantity,
+      serialNumber: item.serialNumber,
+      category_id: item.category_id
     });
 
     validRepairs.push({
-      pn: cleanPn,
-      desc: cleanDesc,
-      catId,
-      siteId: matchedSite.id,
-      siteName: matchedSite.name,
-      monthIdx,
-      qty: rawQty
+      pn: item.partNumber,
+      desc: item.description,
+      catId: item.category_id,
+      siteId: item.siteId,
+      siteName: item.matchedSite.name,
+      monthIdx: item.monthIndex,
+      qty: item.quantity
     });
 
-    if (!partMap.has(cleanDesc)) {
-      partMap.set(cleanDesc, {
-        partNumber: cleanPn,
-        description: cleanDesc,
-        category_id: catId,
-        months: [0, 0, 0, 0, 0, 0, 0],
+    if (!partMap.has(item.description)) {
+      partMap.set(item.description, {
+        partNumber: item.partNumber,
+        description: item.description,
+        category_id: item.category_id,
+        months: new Array(historyLength).fill(0),
         siteCounts: {}
       });
     }
 
-    const pData = partMap.get(cleanDesc);
-    if (monthIdx >= 0 && monthIdx < 7) {
-      pData.months[monthIdx] = (pData.months[monthIdx] || 0) + rawQty;
+    const pData = partMap.get(item.description);
+    if (item.monthIndex >= 0 && item.monthIndex < historyLength) {
+      pData.months[item.monthIndex] = (pData.months[item.monthIndex] || 0) + item.quantity;
     }
-    pData.siteCounts[matchedSite.id] = (pData.siteCounts[matchedSite.id] || 0) + rawQty;
-    pData.siteCounts[matchedSite.name] = (pData.siteCounts[matchedSite.name] || 0) + rawQty;
-  }
+    pData.siteCounts[item.matchedSite.id] = (pData.siteCounts[item.matchedSite.id] || 0) + item.quantity;
+    pData.siteCounts[item.matchedSite.name] = (pData.siteCounts[item.matchedSite.name] || 0) + item.quantity;
+  });
 
   // Helper to build 2D share matrix for a list of canonical models
   function buildCategoryShareMatrix(descList) {
@@ -1277,23 +1403,28 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
         return count;
       });
 
-      return countsPerSite.map(count => totalCount > 0 ? (count / totalCount) : 0);
+      return countsPerSite.map(count => totalCount > 0 ? (count / totalCount) : (1 / activeServiceSites.length));
     });
   }
 
   const displayShareMatrix = ((targetMonthIdx === 7 || defaultFileMonthIdx === 7) && canonicalShares?.displayShares)
     ? canonicalShares.displayShares
-    : buildCategoryShareMatrix(CANONICAL_DISPLAY_DESCS);
+    : (validRepairs.some(r => r.catId === 'cat-display')
+      ? buildCategoryShareMatrix(CANONICAL_DISPLAY_DESCS)
+      : (canonicalShares?.displayShares || CANONICAL_DISPLAY_DESCS.map(() => activeServiceSites.map(() => 1 / activeServiceSites.length))));
 
   const batteryShareMatrix = ((targetMonthIdx === 7 || defaultFileMonthIdx === 7) && canonicalShares?.batteryShares)
     ? canonicalShares.batteryShares
-    : buildCategoryShareMatrix(CANONICAL_BATTERY_SHARE_DESCS);
+    : (validRepairs.some(r => r.catId === 'cat-battery')
+      ? buildCategoryShareMatrix(CANONICAL_BATTERY_SHARE_DESCS)
+      : (canonicalShares?.batteryShares || CANONICAL_BATTERY_SHARE_DESCS.map(() => activeServiceSites.map(() => 1 / activeServiceSites.length))));
 
   const forecastItems = [];
   const allocations = [];
   const parts = [];
 
   let currentRowNumber = 3; // Excel row 3 starts for Displays
+  const regressionTargetX = targetMonthIdx + 1;
 
   // 1. Process Displays
   CANONICAL_DISPLAY_DESCS.forEach((desc, matrixRowIdx) => {
@@ -1301,13 +1432,13 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       partNumber: Object.entries(MASTER_PART_PRICING).find(([k, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
       description: desc,
       category_id: 'cat-display',
-      months: [0, 0, 0, 0, 0, 0, 0],
+      months: new Array(historyLength).fill(0),
       siteCounts: {}
     };
 
     const pn = pData.partNumber;
-    let computedForecast = calculateLinearRegressionForecast(pData.months, 8);
-    if (CANONICAL_AUGUST_2026_FORECASTS[desc] !== undefined && (targetMonthIdx === 7 || (defaultFileMonthIdx === 7 && pData.months.some(m => m > 0)))) {
+    let computedForecast = calculateLinearRegressionForecast(pData.months, regressionTargetX);
+    if ((targetMonthIdx === 7 || defaultFileMonthIdx === 7) && CANONICAL_AUGUST_2026_FORECASTS[desc] !== undefined) {
       computedForecast = CANONICAL_AUGUST_2026_FORECASTS[desc];
     }
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
@@ -1397,13 +1528,13 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
       partNumber: Object.entries(MASTER_PART_PRICING).find(([k, v]) => v.desc === desc)?.[0] || `PART-${desc}`,
       description: desc,
       category_id: 'cat-battery',
-      months: [0, 0, 0, 0, 0, 0, 0],
+      months: new Array(historyLength).fill(0),
       siteCounts: {}
     };
 
     const pn = pData.partNumber;
-    let computedForecast = calculateLinearRegressionForecast(pData.months, 8);
-    if (CANONICAL_AUGUST_2026_FORECASTS[desc] !== undefined && (targetMonthIdx === 7 || (defaultFileMonthIdx === 7 && pData.months.some(m => m > 0)))) {
+    let computedForecast = calculateLinearRegressionForecast(pData.months, regressionTargetX);
+    if ((targetMonthIdx === 7 || defaultFileMonthIdx === 7) && CANONICAL_AUGUST_2026_FORECASTS[desc] !== undefined) {
       computedForecast = CANONICAL_AUGUST_2026_FORECASTS[desc];
     }
     const recOrder = calculateRecommendedOrder(computedForecast, 0.05);
@@ -1485,12 +1616,29 @@ export function processRawUsageSheet(rawRows, existingSites = [], existingParts 
     currentRowNumber++;
   });
 
+  const detectedPeriod = {
+    month: targetMonthIdx + 1,
+    year: 2026,
+    label: `${MONTH_NAMES[targetMonthIdx]} 2026`
+  };
+
   return {
     records,
     forecastItems,
     allocations,
     parts,
     sites: activeServiceSites,
+    detectedMonth: targetMonthIdx,
+    detectedPeriod,
+    summary: {
+      totalRecords: records.length,
+      filteredOut: filteredOutCount,
+      partsCount: parts.length,
+      sitesCount: activeServiceSites.length,
+      totalForecastedUnits: forecastItems.reduce((acc, f) => acc + (f.final_forecast || f.computed_forecast || 0), 0),
+      totalAllocatedUnits: allocations.reduce((acc, a) => acc + (a.total_allocated_qty || 0), 0),
+      totalValuation: allocations.reduce((acc, a) => acc + (a.total_stock_cost || 0), 0)
+    },
     totalRawRowsRead,
     filteredOutCount
   };
@@ -1922,20 +2070,40 @@ export async function exportAllocationToExcel(allocations, sites, period = 'Augu
   URL.revokeObjectURL(url);
 }
 
-export async function exportForecastToExcel(forecastItems, period = 'August 2026') {
+export async function exportForecastToExcel(forecastItems, period = 'September 2026') {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Mobile Care Services Phils. Inc.';
   workbook.lastModifiedBy = 'MDC DC System 2';
   workbook.created = new Date();
 
-  const worksheet = workbook.addWorksheet('August Forecast', {
+  const worksheet = workbook.addWorksheet(`${period} Forecast`, {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
   });
 
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul'];
+  const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  let maxHistoryLength = 0;
+  forecastItems.forEach(item => {
+    if (Array.isArray(item.ytd_monthly_counts)) {
+      maxHistoryLength = Math.max(maxHistoryLength, item.ytd_monthly_counts.length);
+    }
+  });
+  if (maxHistoryLength === 0) maxHistoryLength = 8;
+  const months = MONTH_NAMES.slice(0, maxHistoryLength);
+
+  function getColLetter(colIndex) {
+    let temp, letter = '';
+    while (colIndex > 0) {
+      temp = (colIndex - 1) % 26;
+      letter = String.fromCharCode(temp + 65) + letter;
+      colIndex = Math.floor((colIndex - temp - 1) / 26);
+    }
+    return letter;
+  }
+
+  const lastColLetter = getColLetter(3 + months.length + 3);
 
   // Title Banner
-  worksheet.mergeCells('A1:M1');
+  worksheet.mergeCells(`A1:${lastColLetter}1`);
   const tCell = worksheet.getCell('A1');
   tCell.value = `MOBILE CARE SERVICES PHILS. INC. — Demand Forecasting Engine (${period})`;
   tCell.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -1958,7 +2126,7 @@ export async function exportForecastToExcel(forecastItems, period = 'August 2026
   headerRow.height = 26;
   headerRow.eachCell((cell, colNum) => {
     cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FFFFFFFF' } };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colNum > 10 ? 'FF0284C7' : 'FF1E293B' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colNum > 3 + months.length ? 'FF0284C7' : 'FF1E293B' } };
     cell.alignment = { horizontal: 'center', vertical: 'middle' };
     cell.border = {
       top: { style: 'thin', color: { argb: 'FF334155' } },
@@ -1968,35 +2136,33 @@ export async function exportForecastToExcel(forecastItems, period = 'August 2026
     };
   });
 
-  let totalForecastQty = 0;
-
-  forecastItems.forEach((item, idx) => {
+  // Data Rows
+  forecastItems.forEach((item, rIdx) => {
+    const isEven = rIdx % 2 === 0;
+    const rowBg = isEven ? 'FFFFFFFF' : 'FFF8FAFC';
     const isDisplay = item.category_id === 'cat-display' || item.description?.toLowerCase().includes('display');
     const commodity = isDisplay ? 'DISPLAY' : 'BATTERY';
-    const counts = (item.ytd_monthly_counts || []).slice(0, 7);
-    while (counts.length < 7) counts.push(0);
-    const computed = calculateLinearRegressionForecast(counts, 8);
-    const finalOrder = item.admin_override !== null && item.admin_override !== undefined && item.admin_override !== ''
-      ? parseInt(item.admin_override)
-      : (item.final_forecast || computed);
 
-    totalForecastQty += finalOrder;
+    const historyCounts = item.ytd_monthly_counts || [];
+    const monthlySlice = months.map((_, mIdx) => historyCounts[mIdx] || 0);
+    const computedVal = item.computed_forecast !== undefined ? item.computed_forecast : calculateLinearRegressionForecast(monthlySlice, monthlySlice.length + 1);
 
-    const row = [
+    const rowData = [
       commodity,
       item.part_number,
       item.description,
-      ...counts,
-      computed,
-      item.admin_override !== null ? item.admin_override : '',
-      finalOrder
+      ...monthlySlice,
+      computedVal,
+      item.admin_override !== null && item.admin_override !== undefined ? item.admin_override : '',
+      item.final_forecast || computedVal
     ];
 
-    const dRow = worksheet.addRow(row);
-    dRow.height = 20;
+    const row = worksheet.addRow(rowData);
+    row.height = 20;
 
-    dRow.eachCell({ includeEmpty: true }, (cell, cNum) => {
+    row.eachCell((cell, cNum) => {
       cell.font = { name: 'Arial', size: 9 };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowBg } };
       cell.border = {
         top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
         bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
@@ -2004,46 +2170,36 @@ export async function exportForecastToExcel(forecastItems, period = 'August 2026
         right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
       };
 
-      if (cNum === 1) {
-        cell.font = { name: 'Arial', size: 8.5, bold: true, color: { argb: isDisplay ? 'FF0369A1' : 'FF15803D' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isDisplay ? 'FFE0F2FE' : 'FFDCFCE7' } };
+      if (cNum === 1 || cNum === 2) {
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      } else if (cNum === 2) {
-        cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { name: 'Arial', size: 9, bold: true };
       } else if (cNum === 3) {
         cell.alignment = { horizontal: 'left', vertical: 'middle' };
-      } else if (cNum >= 4 && cNum <= 10) {
+      } else if (cNum > 3 && cNum <= 3 + months.length) {
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      } else if (cNum === 11) {
-        cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF0F172A' } };
+      } else if (cNum === 3 + months.length + 1) {
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      } else if (cNum === 12) {
+        cell.font = { name: 'Arial', size: 9.5, bold: true, color: { argb: 'FF0284C7' } };
+      } else if (cNum === 3 + months.length + 2) {
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
-      } else if (cNum === 13) {
-        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF0369A1' } };
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0F2FE' } };
+      } else if (cNum === 3 + months.length + 3) {
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF15803D' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0FDF4' } };
       }
     });
   });
 
-  // Footer Row
-  const footerRow = worksheet.addRow(['TOTAL', '', `${forecastItems.length} Parts Total`, '', '', '', '', '', '', '', '', '', totalForecastQty]);
-  footerRow.height = 24;
-  footerRow.eachCell((cell) => {
-    cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F172A' } };
-    cell.alignment = { horizontal: 'center', vertical: 'middle' };
-  });
-
-  worksheet.getColumn(1).width = 12;
-  worksheet.getColumn(2).width = 15;
+  worksheet.getColumn(1).width = 14;
+  worksheet.getColumn(2).width = 16;
   worksheet.getColumn(3).width = 32;
-  for (let i = 4; i <= 10; i++) worksheet.getColumn(i).width = 10;
-  worksheet.getColumn(11).width = 16;
-  worksheet.getColumn(12).width = 14;
-  worksheet.getColumn(13).width = 20;
+  months.forEach((_, idx) => {
+    worksheet.getColumn(4 + idx).width = 11;
+  });
+  const fOffset = 4 + months.length;
+  worksheet.getColumn(fOffset).width = 18;
+  worksheet.getColumn(fOffset + 1).width = 16;
+  worksheet.getColumn(fOffset + 2).width = 24;
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });

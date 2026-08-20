@@ -39,18 +39,21 @@ export default function AuditTrail() {
     );
   });
 
-  // Filter upload logs
-  const filteredUploads = (uploadAuditLogs || []).filter(log => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      log.file_name?.toLowerCase().includes(q) ||
-      log.user_name?.toLowerCase().includes(q) ||
-      log.user_email?.toLowerCase().includes(q) ||
-      log.target_month?.toLowerCase().includes(q) ||
-      log.user_role?.toLowerCase().includes(q)
-    );
-  });
+  // Filter upload logs (sorted newest first)
+  const filteredUploads = (uploadAuditLogs || [])
+    .slice()
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .filter(log => {
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      return (
+        log.file_name?.toLowerCase().includes(q) ||
+        log.user_name?.toLowerCase().includes(q) ||
+        log.user_email?.toLowerCase().includes(q) ||
+        log.target_month?.toLowerCase().includes(q) ||
+        log.user_role?.toLowerCase().includes(q)
+      );
+    });
 
   return (
     <div className="audit-view" style={{ maxWidth: '1200px', margin: '0 auto' }}>
@@ -159,91 +162,101 @@ export default function AuditTrail() {
                     </td>
                   </tr>
                 ) : (
-                  filteredUploads.map((log) => (
-                    <tr key={log.id}>
-                      <td style={{ fontSize: '12px', whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>
-                        <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>
-                          {new Date(log.timestamp).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
-                        </div>
-                        <div style={{ fontSize: '11px' }}>
-                          {new Date(log.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
-                        </div>
-                      </td>
-
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <div
-                            style={{
-                              width: '30px',
-                              height: '30px',
-                              borderRadius: '50%',
-                              background: 'var(--primary-light)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontWeight: 700,
-                              fontSize: '12px',
-                              color: 'var(--primary)'
-                            }}
-                          >
-                            {log.user_name ? log.user_name.charAt(0).toUpperCase() : 'A'}
+                  filteredUploads.map((log, index) => {
+                    const isActive = index === 0;
+                    return (
+                      <tr key={log.id} style={{ background: isActive ? '#f0fdf4' : 'inherit' }}>
+                        <td style={{ fontSize: '12px', whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>
+                          <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>
+                            {new Date(log.timestamp).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
                           </div>
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: '13px' }}>
-                              {log.user_name || 'Super Admin'}
+                          <div style={{ fontSize: '11px' }}>
+                            {new Date(log.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                        </td>
+
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div
+                              style={{
+                                width: '30px',
+                                height: '30px',
+                                borderRadius: '50%',
+                                background: isActive ? 'rgba(16, 185, 129, 0.15)' : 'var(--primary-light)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 700,
+                                fontSize: '12px',
+                                color: isActive ? '#059669' : 'var(--primary)'
+                              }}
+                            >
+                              {log.user_name ? log.user_name.charAt(0).toUpperCase() : 'A'}
                             </div>
-                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                              {log.user_email || 'superadmin@mobilecare.com'}
+                            <div>
+                              <div style={{ fontWeight: 600, fontSize: '13px' }}>
+                                {log.user_name || 'Super Admin'}
+                              </div>
+                              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                {log.user_email || 'superadmin@mobilecare.com'}
+                              </div>
+                              <span className="badge badge-primary font-mono" style={{ fontSize: '9.5px', marginTop: '2px', padding: '1px 6px' }}>
+                                {(log.user_role || 'SUPERADMIN').toUpperCase()}
+                              </span>
                             </div>
-                            <span className="badge badge-primary font-mono" style={{ fontSize: '9.5px', marginTop: '2px', padding: '1px 6px' }}>
-                              {(log.user_role || 'SUPERADMIN').toUpperCase()}
+                          </div>
+                        </td>
+
+                        <td>
+                          <div style={{ fontWeight: 600, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <FileSpreadsheet size={14} color="var(--primary)" />
+                            {log.file_name}
+                          </div>
+                          <span className="badge badge-neutral" style={{ fontSize: '10px', marginTop: '4px' }}>
+                            {log.file_type ? log.file_type.replace('_', ' ') : 'WORKBOOK'}
+                          </span>
+                        </td>
+
+                        <td style={{ fontSize: '12.5px', fontWeight: 600 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <Calendar size={13} color="var(--primary)" />
+                            {log.target_month || 'August 2026'}
+                          </div>
+                        </td>
+
+                        <td className="font-mono" style={{ fontWeight: 700, fontSize: '13px', color: 'var(--primary)' }}>
+                          {log.total_forecast_units?.toLocaleString() || 461} units
+                        </td>
+
+                        <td className="font-mono" style={{ fontWeight: 700, fontSize: '13px', color: '#059669' }}>
+                          {log.total_allocated_units?.toLocaleString() || 461} units
+                        </td>
+
+                        <td className="font-mono" style={{ fontWeight: 700, fontSize: '13px', color: 'var(--text-main)' }}>
+                          ${(log.total_master_cost || 72659).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+
+                        <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                          <div><strong>{log.parts_count || 39}</strong> Genuine Parts</div>
+                          <div><strong>{log.sites_count || 26}</strong> Service Sites</div>
+                        </td>
+
+                        <td>
+                          {isActive ? (
+                            <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600, padding: '4px 8px' }}>
+                              <CheckCircle2 size={12} />
+                              Active on Cloud
                             </span>
-                          </div>
-                        </div>
-                      </td>
-
-                      <td>
-                        <div style={{ fontWeight: 600, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <FileSpreadsheet size={14} color="var(--primary)" />
-                          {log.file_name}
-                        </div>
-                        <span className="badge badge-neutral" style={{ fontSize: '10px', marginTop: '4px' }}>
-                          {log.file_type ? log.file_type.replace('_', ' ') : 'WORKBOOK'}
-                        </span>
-                      </td>
-
-                      <td style={{ fontSize: '12.5px', fontWeight: 600 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Calendar size={13} color="var(--primary)" />
-                          {log.target_month || 'August 2026'}
-                        </div>
-                      </td>
-
-                      <td className="font-mono" style={{ fontWeight: 700, fontSize: '13px', color: 'var(--primary)' }}>
-                        {log.total_forecast_units?.toLocaleString() || 461} units
-                      </td>
-
-                      <td className="font-mono" style={{ fontWeight: 700, fontSize: '13px', color: '#059669' }}>
-                        {log.total_allocated_units?.toLocaleString() || 461} units
-                      </td>
-
-                      <td className="font-mono" style={{ fontWeight: 700, fontSize: '13px', color: 'var(--text-main)' }}>
-                        ${(log.total_master_cost || 72659).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-
-                      <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                        <div><strong>{log.parts_count || 39}</strong> Genuine Parts</div>
-                        <div><strong>{log.sites_count || 26}</strong> Service Sites</div>
-                      </td>
-
-                      <td>
-                        <span className="badge badge-success" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px' }}>
-                          <CheckCircle2 size={12} />
-                          Active in DC
-                        </span>
-                      </td>
-                    </tr>
-                  ))
+                          ) : (
+                            <span className="badge badge-neutral" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '10.5px', color: 'var(--text-muted)', padding: '3px 7px' }}>
+                              <History size={11} />
+                              Superseded
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
