@@ -117,8 +117,11 @@ export default function Sidebar() {
             <h4 style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {currentUser?.fullName || 'User'}
             </h4>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
-              <span className="badge badge-primary" style={{ fontSize: '9.5px', padding: '1px 5px' }}>
+            <div style={{ fontSize: '11px', color: '#38bdf8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: '1px' }} title={currentUser?.rolePosition || 'DC Operations'}>
+              {currentUser?.rolePosition || (currentUser?.role === 'superadmin' ? 'Superadmin' : currentUser?.role === 'admin' ? 'Operations Lead' : 'DC Specialist')}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px' }}>
+              <span className="badge badge-primary" style={{ fontSize: '9.5px', padding: '1px 5px', textTransform: 'uppercase' }}>
                 {currentUser?.role?.replace('_', ' ')}
               </span>
               {userSite && (

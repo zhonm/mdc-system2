@@ -273,7 +273,7 @@ export default function Dashboard() {
               </span>
             </div>
             <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>
-              Logged in as <strong style={{ color: '#f1f5f9' }}>{currentUser?.fullName || 'Zhon Manaois'}</strong> • Mobile Care Services Phils. Inc. Central Distribution Hub
+              Logged in as <strong style={{ color: '#f1f5f9' }}>{currentUser?.fullName || 'Zhon Manaois'}</strong> {currentUser?.rolePosition ? `(${currentUser.rolePosition})` : ''} • Mobile Care Services Phils. Inc. Central Distribution Hub
             </p>
           </div>
 

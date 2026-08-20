@@ -29,13 +29,42 @@ export const ALL_PAGES = [
   { id: 'user-access', label: 'User Access Management', section: 'Admin' }
 ];
 
-// Sensible default page permissions per role
+// Simplified Sensible default page permissions per role
 export const ROLE_PRESETS = {
   superadmin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'audit', 'settings', 'user-access'],
-  admin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'intake-records', 'allocation', 'shipments', 'reports', 'audit', 'settings'],
+  admin: ['dashboard', 'import', 'forecast', 'records', 'orders', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports', 'audit', 'settings', 'user-access'],
+  user: ['dashboard', 'intake-records', 'shipments', 'reports', 'audit'],
+  // Legacy aliases
   warehouse_staff: ['dashboard', 'scan-in', 'intake-records', 'allocation', 'scan-out', 'shipments', 'reports'],
   site_staff: ['dashboard', 'shipments', 'reports'],
   management_viewer: ['dashboard', 'forecast', 'records', 'intake-records', 'allocation', 'shipments', 'reports', 'audit']
+};
+
+export const ROLE_OPTIONS = [
+  {
+    value: 'superadmin',
+    label: 'Superadmin',
+    description: 'Full access to all system features, configurations, and user permissions.'
+  },
+  {
+    value: 'admin',
+    label: 'Admin',
+    description: 'Operational administrator. Page access is assigned by Superadmin. Can edit user role positions.'
+  },
+  {
+    value: 'user',
+    label: 'User (View-Only)',
+    description: 'Primarily view-only access to operational dashboards, reports, and logs.'
+  }
+];
+
+export const getDefaultRolePosition = (role) => {
+  switch (role) {
+    case 'superadmin': return 'Lead System Architect & Superadmin';
+    case 'admin': return 'Distribution Operations Lead';
+    case 'user': return 'Warehouse Operations Specialist';
+    default: return 'DC Specialist';
+  }
 };
 
 // Initial provisioned users (Only Zhon Manaois and Joshua Juvida)
@@ -45,6 +74,7 @@ const INITIAL_USERS = [
     email: 'zhon.manaois@mobilecareph.com',
     fullName: 'Zhon Manaois',
     role: 'superadmin',
+    rolePosition: 'Lead System Architect & Superadmin',
     siteId: 'site-dc',
     hasSetPassword: true,
     passwordHash: 'Password123',
@@ -56,6 +86,7 @@ const INITIAL_USERS = [
     email: 'joshua.juvida@mobilecareph.com',
     fullName: 'Joshua Juvida',
     role: 'superadmin',
+    rolePosition: 'DC Operations Lead & Superadmin',
     siteId: 'site-dc',
     hasSetPassword: true,
     passwordHash: 'Password123',
@@ -301,20 +332,23 @@ export function AppProvider({ children }) {
               .select('page_id')
               .eq('user_id', matchedDb.id);
 
+            const resolvedRole = matchedDb.role || 'user';
+            const resolvedPosition = matchedDb.role_position || matchedDb.rolePosition || getDefaultRolePosition(resolvedRole);
             const perms = dbPerms && dbPerms.length > 0
               ? dbPerms.map(p => p.page_id)
-              : (ROLE_PRESETS[matchedDb.role] || ROLE_PRESETS.warehouse_staff);
+              : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user);
 
             user = {
               id: matchedDb.id,
               email: matchedDb.email,
               fullName: matchedDb.full_name || matchedDb.fullName,
-              role: matchedDb.role || 'warehouse_staff',
+              role: resolvedRole,
+              rolePosition: resolvedPosition,
               siteId: matchedDb.site_id || 'site-dc',
               hasSetPassword: matchedDb.has_set_password ?? true,
               passwordHash: matchedDb.password_hash || 'Password123',
               isActive: matchedDb.is_active ?? true,
-              permittedPages: matchedDb.role === 'superadmin' ? ROLE_PRESETS.superadmin : perms
+              permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : perms
             };
 
             setUsersList(prev => [...prev.filter(u => u.id !== user.id), user]);
@@ -367,20 +401,23 @@ export function AppProvider({ children }) {
               .select('page_id')
               .eq('user_id', matchedDb.id);
 
+            const resolvedRole = matchedDb.role || 'user';
+            const resolvedPosition = matchedDb.role_position || matchedDb.rolePosition || getDefaultRolePosition(resolvedRole);
             const perms = dbPerms && dbPerms.length > 0
               ? dbPerms.map(p => p.page_id)
-              : (ROLE_PRESETS[matchedDb.role] || ROLE_PRESETS.warehouse_staff);
+              : (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user);
 
             user = {
               id: matchedDb.id,
               email: matchedDb.email,
               fullName: matchedDb.full_name || matchedDb.fullName,
-              role: matchedDb.role || 'warehouse_staff',
+              role: resolvedRole,
+              rolePosition: resolvedPosition,
               siteId: matchedDb.site_id || 'site-dc',
               hasSetPassword: matchedDb.has_set_password ?? true,
               passwordHash: matchedDb.password_hash || 'Password123',
               isActive: matchedDb.is_active ?? true,
-              permittedPages: matchedDb.role === 'superadmin' ? ROLE_PRESETS.superadmin : perms
+              permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : perms
             };
 
             setUsersList(prev => [...prev.filter(u => u.id !== user.id), user]);
@@ -479,7 +516,7 @@ export function AppProvider({ children }) {
   // --- USER ACCESS MANAGEMENT ACTIONS (Superadmin Only with Database Sync) ---
 
   // 5. Create / Provision New User
-  const provisionUser = async ({ fullName, email, role, siteId, customPermissions }) => {
+  const provisionUser = async ({ fullName, email, role, rolePosition, siteId, customPermissions }) => {
     const cleanEmail = email.trim().toLowerCase();
     if (usersList.some(u => u.email.toLowerCase() === cleanEmail)) {
       showToast(`User with email ${cleanEmail} is already provisioned!`, 'error');
@@ -493,24 +530,27 @@ export function AppProvider({ children }) {
       localStorage.setItem('mdc_deleted_user_ids', JSON.stringify(filteredDeleted));
     } catch (e) {}
 
-    const defaultPages = customPermissions || ROLE_PRESETS[role] || ROLE_PRESETS.warehouse_staff;
+    const defaultPages = customPermissions || ROLE_PRESETS[role] || ROLE_PRESETS.user;
+    const finalRolePosition = String(rolePosition || '').trim() || getDefaultRolePosition(role);
 
     const newUser = {
       id: `usr-${Date.now()}`,
       email: cleanEmail,
       fullName: fullName.trim(),
       role,
+      rolePosition: finalRolePosition,
       siteId: siteId || 'site-dc',
       hasSetPassword: false, // Force them to set password on first login!
       passwordHash: null,
       isActive: true,
-      permittedPages: defaultPages
+      permittedPages: role === 'superadmin' ? ROLE_PRESETS.superadmin : defaultPages
     };
 
     // Update local state immediately
     const nextList = [...usersList.filter(u => u.email.toLowerCase() !== cleanEmail), newUser];
     setUsersList(nextList);
     localStorage.setItem('mdc_users', JSON.stringify(nextList));
+    dbStorage.setItem('mdc_users', nextList);
 
     // Sync to Supabase PostgreSQL database
     if (supabase) {
@@ -521,6 +561,7 @@ export function AppProvider({ children }) {
             email: cleanEmail,
             full_name: fullName.trim(),
             role: role,
+            role_position: finalRolePosition,
             has_set_password: false,
             is_active: true,
             created_at: new Date().toISOString(),
@@ -540,7 +581,7 @@ export function AppProvider({ children }) {
       }
     }
 
-    showToast(`Provisioned user ${fullName} (${cleanEmail}). First-time setup required on initial login.`, 'success');
+    showToast(`Provisioned user ${fullName} (${cleanEmail}) as ${finalRolePosition}.`, 'success');
     return { success: true, user: newUser };
   };
 
@@ -677,7 +718,7 @@ export function AppProvider({ children }) {
   };
 
   // 9. Update User Profile (Full Database & Email Sync)
-  const updateUser = async (userId, { fullName, email, role, siteId }) => {
+  const updateUser = async (userId, { fullName, email, role, rolePosition, siteId, permittedPages: customPages }) => {
     const target = usersList.find(u => u.id === userId);
     if (!target) {
       return { success: false, error: 'User not found' };
@@ -691,21 +732,32 @@ export function AppProvider({ children }) {
 
     const previousEmail = target.email;
     const roleChanged = role !== target.role;
-    const permittedPages = roleChanged
-      ? (ROLE_PRESETS[role] || target.permittedPages)
-      : target.permittedPages;
+    const resolvedRole = role || target.role;
+    const resolvedPosition = String(rolePosition || '').trim() || target.rolePosition || getDefaultRolePosition(resolvedRole);
+    
+    let finalPermittedPages = customPages;
+    if (!finalPermittedPages) {
+      finalPermittedPages = roleChanged
+        ? (ROLE_PRESETS[resolvedRole] || target.permittedPages)
+        : target.permittedPages;
+    }
 
     const updatedUser = {
       ...target,
       fullName: fullName.trim(),
       email: cleanEmail,
-      role,
+      role: resolvedRole,
+      rolePosition: resolvedPosition,
       siteId: siteId || target.siteId,
-      permittedPages: role === 'superadmin' ? ROLE_PRESETS.superadmin : permittedPages
+      permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : finalPermittedPages
     };
 
     // 1. Update React local state immediately
     setUsersList(prev => prev.map(u => (u.id === userId ? updatedUser : u)));
+    try {
+      localStorage.setItem('mdc_users', JSON.stringify(usersList.map(u => u.id === userId ? updatedUser : u)));
+      dbStorage.setItem('mdc_users', usersList.map(u => u.id === userId ? updatedUser : u));
+    } catch (e) {}
 
     // 2. Update currentUser if editing own account
     if (currentUser?.id === userId || currentUser?.email?.toLowerCase() === previousEmail.toLowerCase()) {
@@ -720,7 +772,8 @@ export function AppProvider({ children }) {
         const updatePayload = {
           email: cleanEmail,
           full_name: fullName.trim(),
-          role: role,
+          role: resolvedRole,
+          role_position: resolvedPosition,
           updated_at: new Date().toISOString()
         };
 
@@ -757,18 +810,108 @@ export function AppProvider({ children }) {
             .upsert({
               email: cleanEmail,
               full_name: fullName.trim(),
-              role: role,
+              role: resolvedRole,
+              role_position: resolvedPosition,
               has_set_password: target.hasSetPassword ?? true,
               is_active: target.isActive ?? true,
               updated_at: new Date().toISOString()
             }, { onConflict: 'email' });
         }
       } catch (dbErr) {
-        console.warn('Could not sync user update to Supabase database:', dbErr.message);
+        console.warn('Supabase profile update notice:', dbErr.message);
       }
     }
 
-    showToast(`Updated profile for ${updatedUser.fullName} (${cleanEmail})`, 'success');
+    showToast(`Updated profile for ${fullName} (${resolvedPosition})`, 'success');
+    return { success: true, user: updatedUser };
+  };
+
+  // 10. Dedicated Quick Role Position Update (Callable by Superadmin & Admin)
+  const updateUserRolePosition = async (userId, newRolePosition) => {
+    const target = usersList.find(u => u.id === userId);
+    if (!target) return { success: false, error: 'User not found' };
+
+    const pos = String(newRolePosition || '').trim() || getDefaultRolePosition(target.role);
+    const updatedUser = { ...target, rolePosition: pos };
+
+    setUsersList(prev => prev.map(u => (u.id === userId ? updatedUser : u)));
+    if (currentUser?.id === userId) {
+      setCurrentUser(updatedUser);
+    }
+
+    try {
+      const nextList = usersList.map(u => u.id === userId ? updatedUser : u);
+      localStorage.setItem('mdc_users', JSON.stringify(nextList));
+      dbStorage.setItem('mdc_users', nextList);
+    } catch (e) {}
+
+    if (supabase) {
+      try {
+        await supabase
+          .from('profiles')
+          .update({ role_position: pos, updated_at: new Date().toISOString() })
+          .or(`id.eq.${userId},email.ilike.${target.email}`);
+      } catch (e) {
+        console.warn('Supabase role position sync notice:', e.message);
+      }
+    }
+
+    showToast(`Updated role position for ${target.fullName} to "${pos}"`, 'success');
+    return { success: true, user: updatedUser };
+  };
+
+  // 11. Superadmin Password Reset for All Accounts (including self)
+  const resetUserPassword = async (userId, { newPassword, requireNextLoginReset = false }) => {
+    const target = usersList.find(u => u.id === userId);
+    if (!target) return { success: false, error: 'User not found' };
+
+    const finalPassword = String(newPassword || '').trim() || 'Password123';
+    const hasSet = !requireNextLoginReset;
+
+    const updatedUser = {
+      ...target,
+      passwordHash: finalPassword,
+      hasSetPassword: hasSet
+    };
+
+    setUsersList(prev => prev.map(u => (u.id === userId ? updatedUser : u)));
+
+    // If resetting own password, keep currentUser in sync
+    if (currentUser?.id === userId || currentUser?.email?.toLowerCase() === target.email?.toLowerCase()) {
+      setCurrentUser(updatedUser);
+    }
+
+    try {
+      const nextList = usersList.map(u => (u.id === userId ? updatedUser : u));
+      localStorage.setItem('mdc_users', JSON.stringify(nextList));
+      dbStorage.setItem('mdc_users', nextList);
+    } catch (e) {}
+
+    // Sync to Supabase
+    if (supabase) {
+      try {
+        if (currentUser?.id === userId) {
+          await supabase.auth.updateUser({ password: finalPassword });
+        }
+
+        await supabase
+          .from('profiles')
+          .update({
+            has_set_password: hasSet,
+            updated_at: new Date().toISOString()
+          })
+          .or(`id.eq.${userId},email.ilike.${target.email}`);
+      } catch (dbErr) {
+        console.warn('Supabase password reset sync note:', dbErr.message);
+      }
+    }
+
+    if (requireNextLoginReset) {
+      showToast(`Password reset for ${target.fullName}. User will configure a new password on their next login.`, 'info');
+    } else {
+      showToast(`Password successfully updated for ${target.fullName}!`, 'success');
+    }
+
     return { success: true, user: updatedUser };
   };
 
@@ -1238,17 +1381,20 @@ export function AppProvider({ children }) {
           activeDbProfiles.forEach(p => {
             const emailKey = p.email.toLowerCase();
             const existing = map.get(emailKey);
-            const userPerms = permMap.get(p.id) || (ROLE_PRESETS[p.role] || ROLE_PRESETS.warehouse_staff);
+            const resolvedRole = p.role || existing?.role || 'user';
+            const resolvedPosition = p.role_position || existing?.rolePosition || getDefaultRolePosition(resolvedRole);
+            const userPerms = permMap.get(p.id) || (ROLE_PRESETS[resolvedRole] || ROLE_PRESETS.user);
             map.set(emailKey, {
               id: existing?.id || p.id,
               email: p.email,
               fullName: p.full_name || existing?.fullName || 'Staff User',
-              role: p.role || existing?.role || 'warehouse_staff',
+              role: resolvedRole,
+              rolePosition: resolvedPosition,
               siteId: p.site_id || existing?.siteId || 'site-dc',
               hasSetPassword: p.has_set_password ?? existing?.hasSetPassword ?? true,
               passwordHash: p.password_hash || existing?.passwordHash || 'Password123',
               isActive: p.is_active ?? existing?.isActive ?? true,
-              permittedPages: p.role === 'superadmin' ? ROLE_PRESETS.superadmin : userPerms
+              permittedPages: resolvedRole === 'superadmin' ? ROLE_PRESETS.superadmin : userPerms
             });
           });
 
@@ -3958,6 +4104,8 @@ export function AppProvider({ children }) {
         signOut,
         provisionUser,
         updateUser,
+        updateUserRolePosition,
+        resetUserPassword,
         deleteUser,
         toggleUserPagePermission,
         applyRolePresetToUser,
