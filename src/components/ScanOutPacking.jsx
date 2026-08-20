@@ -314,7 +314,7 @@ export default function ScanOutPacking() {
     if (currentShipment.items && currentShipment.items.length > 0) {
       const isAlreadySaved = shipments.some(s => s.id === currentShipment.id && (s.status === 'saved' || s.status === 'shipped'));
       if (!isAlreadySaved) {
-        clearShipmentDraftItems(currentShipment.id);
+        clearShipmentDraftItems(currentShipment.id, currentShipment.items);
       }
     }
 

@@ -2369,6 +2369,32 @@ export function AppProvider({ children }) {
       shipped_by: currentUser?.fullName || 'Warehouse Staff'
     };
     setInventoryUnits(updatedUnits);
+    try {
+      localStorage.setItem('mdc_inventory', JSON.stringify(updatedUnits));
+    } catch (e) {
+      console.warn('LocalStorage save error in addScanOutUnit:', e);
+    }
+    dbStorage.setItem('mdc_inventory', updatedUnits);
+
+    if (supabase) {
+      (async () => {
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+        try {
+          await supabase
+            .from('inventory_units')
+            .update({
+              status: 'packed',
+              box_number: boxNumber,
+              shipped_at: new Date().toISOString()
+            })
+            .eq('serial_number', cleanSerial);
+          setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        } catch (dbErr) {
+          console.warn('Supabase pack unit note:', dbErr.message);
+          setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+        }
+      })();
+    }
 
     const itemToAdd = {
       part_number: unit.part_number,
@@ -2454,6 +2480,29 @@ export function AppProvider({ children }) {
       return match ? match : u;
     });
     setInventoryUnits(updatedInventory);
+    try {
+      localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory));
+    } catch (e) {
+      console.warn('LocalStorage save error in batchAddScanOutUnits:', e);
+    }
+    dbStorage.setItem('mdc_inventory', updatedInventory);
+
+    if (supabase) {
+      (async () => {
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+        try {
+          const serials = itemsToAdd.map(it => it.serial_number);
+          await supabase
+            .from('inventory_units')
+            .update({ status: 'packed', shipped_at: new Date().toISOString() })
+            .in('serial_number', serials);
+          setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        } catch (dbErr) {
+          console.warn('Supabase batch pack note:', dbErr.message);
+          setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+        }
+      })();
+    }
 
     // Update shipments
     let targetShipmentNumber = '';
@@ -2470,13 +2519,6 @@ export function AppProvider({ children }) {
 
     // Update logs
     setScanLogs(prev => [...newLogs, ...prev].slice(0, 300));
-
-    // Immediate LocalStorage update
-    try {
-      localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory));
-    } catch (e) {
-      console.warn('LocalStorage save error in batchAddScanOutUnits:', e);
-    }
 
     barcodeAudio.playSuccess();
     showToast(`Batch packed ${itemsToAdd.length} units into ${targetShipmentNumber || 'Shipment'}!`, 'success');
@@ -2521,28 +2563,76 @@ export function AppProvider({ children }) {
     } catch (e) {
       console.warn('LocalStorage save error in removeScanOutUnit:', e);
     }
+    dbStorage.setItem('mdc_inventory', updatedInventory);
+
+    // Direct Cloud Database Sync
+    if (supabase) {
+      (async () => {
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+        try {
+          let dcSiteId = null;
+          const { data: dcSite } = await supabase.from('sites').select('id').or('is_dc.eq.true,code.eq.DC-MDC,code.eq.DC').limit(1).maybeSingle();
+          if (dcSite?.id) dcSiteId = dcSite.id;
+          else {
+            const { data: anySite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
+            dcSiteId = anySite?.id;
+          }
+
+          if (dcSiteId) {
+            await supabase
+              .from('inventory_units')
+              .update({
+                status: 'in_stock',
+                current_site_id: dcSiteId,
+                box_number: 1,
+                shipped_at: null,
+                shipped_by: null
+              })
+              .eq('serial_number', cleanSerial);
+          }
+          setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        } catch (dbErr) {
+          console.warn('Supabase unit revert error:', dbErr.message);
+          setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+        }
+      })();
+    }
 
     showToast(`Removed #${cleanSerial} from packing list. Returned to DC In-Stock inventory.`, 'info');
     return { success: true, unit: revertedPart };
   };
 
-  // 2.2 Clear / Unpack Items from a Specific Shipment Draft (Only affects drafts, NEVER saved shipments)
-  const clearShipmentDraftItems = (shipmentId) => {
-    const targetShipment = shipments.find(s => s.id === shipmentId);
-    if (!targetShipment || !targetShipment.items || targetShipment.items.length === 0) {
+  // 2.2 Clear / Unpack Items from a Specific Shipment Draft (Returns all parts back to DC In-Stock inventory)
+  const clearShipmentDraftItems = (shipmentIdOrObj, explicitItems = []) => {
+    let targetShipmentId = typeof shipmentIdOrObj === 'object' ? (shipmentIdOrObj.shipmentId || shipmentIdOrObj.id) : shipmentIdOrObj;
+    let itemsToProcess = [];
+
+    if (Array.isArray(explicitItems) && explicitItems.length > 0) {
+      itemsToProcess = explicitItems;
+    } else if (typeof shipmentIdOrObj === 'object' && Array.isArray(shipmentIdOrObj.items) && shipmentIdOrObj.items.length > 0) {
+      itemsToProcess = shipmentIdOrObj.items;
+    } else {
+      const targetShipment = shipments.find(s => s.id === targetShipmentId);
+      if (targetShipment && Array.isArray(targetShipment.items)) {
+        itemsToProcess = targetShipment.items;
+      }
+    }
+
+    if (!itemsToProcess || itemsToProcess.length === 0) {
       return { success: true, count: 0 };
     }
 
-    // Safety: If shipment is already saved or shipped in database, DO NOT touch it!
-    if (targetShipment.status !== 'draft') {
+    const serialsToRevert = new Set(
+      itemsToProcess.map(it => String(it.serial_number || it.serialNumber || '').trim().toUpperCase()).filter(Boolean)
+    );
+
+    if (serialsToRevert.size === 0) {
       return { success: true, count: 0 };
     }
 
-    const serialsToRevert = new Set(targetShipment.items.map(it => it.serial_number.toUpperCase()));
-    
     // Revert units status back to in_stock
     const updatedInventory = inventoryUnits.map(u => {
-      if (serialsToRevert.has(u.serial_number.toUpperCase())) {
+      if (serialsToRevert.has(String(u.serial_number || '').toUpperCase())) {
         return {
           ...u,
           status: 'in_stock',
@@ -2554,23 +2644,62 @@ export function AppProvider({ children }) {
       }
       return u;
     });
+
     setInventoryUnits(updatedInventory);
-    dbStorage.setItem('mdc_inventory', updatedInventory);
-
-    // Only remove draft from active shipments list
-    const updatedShipments = shipments.filter(s => s.id !== shipmentId);
-    setShipments(updatedShipments);
-    dbStorage.setItem('mdc_shipments', updatedShipments);
-
     try {
       localStorage.setItem('mdc_inventory', JSON.stringify(updatedInventory));
-      localStorage.setItem('mdc_shipments', JSON.stringify(updatedShipments));
       localStorage.removeItem('mdc_active_pack_draft');
     } catch (e) {
       console.warn('LocalStorage save error:', e);
     }
+    dbStorage.setItem('mdc_inventory', updatedInventory);
 
-    showToast(`Cleared ${serialsToRevert.size} packed items from draft. Units reverted back to In-Stock DC inventory.`, 'info');
+    // If targetShipment was in shipments, remove or clear it
+    if (targetShipmentId) {
+      const updatedShipments = shipments.filter(s => s.id !== targetShipmentId);
+      setShipments(updatedShipments);
+      dbStorage.setItem('mdc_shipments', updatedShipments);
+      try {
+        localStorage.setItem('mdc_shipments', JSON.stringify(updatedShipments));
+      } catch (e) {}
+    }
+
+    // Direct Cloud Database Reversion
+    if (supabase) {
+      (async () => {
+        setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+        try {
+          const serialsArray = Array.from(serialsToRevert);
+          let dcSiteId = null;
+          const { data: dcSite } = await supabase.from('sites').select('id').or('is_dc.eq.true,code.eq.DC-MDC,code.eq.DC').limit(1).maybeSingle();
+          if (dcSite?.id) {
+            dcSiteId = dcSite.id;
+          } else {
+            const { data: anySite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
+            dcSiteId = anySite?.id;
+          }
+
+          if (dcSiteId && serialsArray.length > 0) {
+            await supabase
+              .from('inventory_units')
+              .update({
+                status: 'in_stock',
+                current_site_id: dcSiteId,
+                box_number: 1,
+                shipped_at: null,
+                shipped_by: null
+              })
+              .in('serial_number', serialsArray);
+          }
+          setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        } catch (dbErr) {
+          console.warn('Supabase inventory revert error:', dbErr.message);
+          setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+        }
+      })();
+    }
+
+    showToast(`Cleared ${serialsToRevert.size} packed items from draft. Units returned to In-Stock DC inventory!`, 'info');
     return { success: true, count: serialsToRevert.size };
   };
 
