@@ -349,26 +349,10 @@ export default function ScanOutPacking() {
     showToast('Active packing list cleared. Ready to create a new packing list for another site.', 'info');
   };
 
-  // --- Save Packing List to Database (Permanently in Database History) ---
-  const handleSaveToDatabase = () => {
-    if (!currentShipment.items || currentShipment.items.length === 0) {
-      showToast('Cannot save an empty packing list. Please add parts first.', 'error');
-      return;
-    }
-    const toSave = {
-      ...currentShipment,
-      id: currentShipment.id || `ship-${Date.now()}`,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-    saveShipmentToHistory(toSave);
-    showToast(`Saved Packing List ${toSave.invoice_ref} with ${toSave.items.length} parts permanently to Database History below!`, 'success');
-  };
-
-  // Finalize Manifest
+  // --- Combined Action: Save to Database & Finalize Packing List ---
   const handleFinalizeShipment = () => {
     if (!currentShipment.items || currentShipment.items.length === 0) {
-      showToast('Cannot finalize empty packing list', 'error');
+      showToast('Cannot finalize an empty packing list. Please add parts first.', 'error');
       return;
     }
     const finalized = {
@@ -378,18 +362,25 @@ export default function ScanOutPacking() {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
+
+    // 1. Permanently save to Database History and Cloud DB
     saveShipmentToHistory(finalized);
+
+    // 2. Automatically generate and download formatted corporate PDF
     generatePackingListPDF(finalized, finalized.items || [], selectedSite);
     
-    // Reset draft for next shipment
+    // 3. Reset draft from localStorage and initialize fresh workstation for next shipment
     try {
       localStorage.removeItem('mdc_active_pack_draft');
     } catch (e) {}
 
+    const nextShipmentNumber = `SHIP-202608-${String(shipments.length + 2).padStart(3, '0')}`;
+    const nextInvoiceRef = `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`;
+
     setCurrentShipment({
       id: `ship-${Date.now()}`,
-      shipment_number: `SHIP-202608-${String(shipments.length + 2).padStart(3, '0')}`,
-      invoice_ref: `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`,
+      shipment_number: nextShipmentNumber,
+      invoice_ref: nextInvoiceRef,
       site_id: selectedSiteId,
       week_number: selectedWeek,
       shipment_date: new Date().toLocaleDateString('en-US'),
@@ -404,7 +395,8 @@ export default function ScanOutPacking() {
       items: []
     });
 
-    showToast(`Manifest ${finalized.invoice_ref} finalized and saved to Database History!`, 'success');
+    setScanResult(null);
+    showToast(`Saved to Database & Finalized ${finalized.invoice_ref}! Station ready for next packing list.`, 'success');
   };
 
   const filteredManifestItems = useMemo(() => {
@@ -716,19 +708,9 @@ export default function ScanOutPacking() {
 
             <button
               className="btn btn-secondary btn-sm"
-              onClick={handleSaveToDatabase}
-              disabled={!currentShipment.items || currentShipment.items.length === 0}
-              style={{ height: '34px', background: '#e0e7ff', color: '#3730a3', borderColor: '#c7d2fe', fontWeight: 600 }}
-              title="Save current packing list and included parts to Database History"
-            >
-              <Database size={14} />
-              <span>Save to Database</span>
-            </button>
-
-            <button
-              className="btn btn-secondary btn-sm"
               onClick={() => printPackingListDirect(currentShipment, currentShipment.items, selectedSite)}
               style={{ height: '34px' }}
+              title="Preview and print packing list"
             >
               <Printer size={14} />
               <span>Print Preview</span>
@@ -738,10 +720,11 @@ export default function ScanOutPacking() {
               className="btn btn-primary btn-sm"
               onClick={handleFinalizeShipment}
               disabled={!currentShipment.items || currentShipment.items.length === 0}
-              style={{ height: '34px' }}
+              style={{ height: '34px', background: '#0284c7', borderColor: '#0284c7', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}
+              title="Save packing list permanently to database, download PDF, and ready station for next packing list"
             >
-              <Download size={14} />
-              <span>Finalize & Download PDF</span>
+              <CheckCircle2 size={15} />
+              <span>Finalize & Save Packing List</span>
             </button>
           </div>
         </div>
