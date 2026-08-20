@@ -1184,7 +1184,7 @@ export function AppProvider({ children }) {
               const existing = map.get(s.code);
               map.set(s.code, {
                 ...(existing || {}),
-                id: s.id || existing?.id,
+                id: existing?.id || s.id,
                 code: s.code,
                 name: s.name || existing?.name,
                 region: s.region || existing?.region || 'Metro Manila',
@@ -1315,7 +1315,8 @@ export function AppProvider({ children }) {
             if (sCode) alloc.site_quantities[sCode] = item.monthly_allocated_qty || 0;
           });
           const mappedAllocs = Array.from(allocMap.values());
-          if (mappedAllocs.length > 0) {
+          const totalUnitsHydrated = mappedAllocs.reduce((s, a) => s + (a.total_allocated_qty || 0), 0);
+          if (mappedAllocs.length > 0 && totalUnitsHydrated >= 461) {
             setAllocations(mappedAllocs);
             try {
               localStorage.setItem('mdc_allocations', JSON.stringify(mappedAllocs));
