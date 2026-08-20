@@ -2033,71 +2033,12 @@ export function AppProvider({ children }) {
       } catch (e) {
         console.warn('LocalStorage save error:', e);
       }
+      dbStorage.setItem('mdc_inventory', updated);
       return updated;
     });
-    // Direct Cloud Database Auto-Save
-    if (supabase) {
-      (async () => {
-        setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
-        try {
-          // 1. Get or create real Part UUID in Supabase
-          let dbPartId = null;
-          const { data: dbPart } = await supabase
-            .from('parts')
-            .select('id')
-            .eq('part_number', cleanPN)
-            .maybeSingle();
 
-          if (dbPart?.id) {
-            dbPartId = dbPart.id;
-          } else {
-            const { data: dbCat } = await supabase.from('part_categories').select('id').limit(1).maybeSingle();
-            const { data: newDbPart } = await supabase
-              .from('parts')
-              .upsert({
-                part_number: cleanPN,
-                description: part.description || `Part ${cleanPN}`,
-                ...(dbCat?.id ? { category_id: dbCat.id } : {})
-              }, { onConflict: 'part_number' })
-              .select('id')
-              .maybeSingle();
-            dbPartId = newDbPart?.id || null;
-          }
-
-          // 2. Get DC Site UUID
-          let dcSiteId = null;
-          const { data: dcSite } = await supabase
-            .from('sites')
-            .select('id')
-            .or('is_dc.eq.true,code.eq.DC-MDC,code.eq.DC')
-            .limit(1)
-            .maybeSingle();
-
-          if (dcSite?.id) {
-            dcSiteId = dcSite.id;
-          } else {
-            const { data: anySite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
-            dcSiteId = anySite?.id || null;
-          }
-
-          if (dbPartId && dcSiteId) {
-            await supabase.from('inventory_units').upsert({
-              part_id: dbPartId,
-              current_site_id: dcSiteId,
-              serial_number: cleanSerial,
-              status: newUnit.status || 'in_stock',
-              box_number: newUnit.box_number || 1,
-              notes: newUnit.description || null,
-              received_at: newUnit.received_at
-            }, { onConflict: 'serial_number' });
-          }
-          setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        } catch (dbErr) {
-          console.warn('Supabase direct auto-save notice:', dbErr.message);
-          setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
-        }
-      })();
-    }
+    // Direct Cloud Database Auto-Save (Multi-account & Real-time persisted)
+    saveUnitsToSupabase([newUnit]);
 
     if (poId) {
       setPurchaseOrders(prev => prev.map(po => {
@@ -2123,6 +2064,122 @@ export function AppProvider({ children }) {
     logScan('RECEIVE_IN', cleanPN, cleanSerial, true);
     showToast(`Received ${part.description} (${cleanSerial})`, 'success');
     return { success: true, unit: newUnit };
+  };
+
+  // Dedicated Robust Cloud Unit Persistence (Ensures foreign keys, table rows, and multi-user sync)
+  const saveUnitsToSupabase = async (units) => {
+    if (!supabase || !units || units.length === 0) return;
+    setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
+    try {
+      // 1. Get or create part_category
+      let defaultCatId = null;
+      const { data: dbCats } = await supabase.from('part_categories').select('id').limit(1);
+      if (dbCats && dbCats.length > 0) {
+        defaultCatId = dbCats[0].id;
+      } else {
+        const { data: newCat } = await supabase
+          .from('part_categories')
+          .insert({ code: 'cat-general', name: 'General Parts' })
+          .select('id')
+          .maybeSingle();
+        defaultCatId = newCat?.id || null;
+      }
+
+      // 2. Get or create DC Site
+      let dcSiteId = null;
+      const { data: dcSite } = await supabase.from('sites').select('id').or('is_dc.eq.true,code.eq.DC-MDC,code.eq.DC').limit(1).maybeSingle();
+      if (dcSite?.id) {
+        dcSiteId = dcSite.id;
+      } else {
+        const { data: anySite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
+        if (anySite?.id) {
+          dcSiteId = anySite.id;
+        } else {
+          const { data: newSite } = await supabase
+            .from('sites')
+            .insert({ code: 'DC-MDC', name: 'Mobile Care Distribution Center', is_dc: true })
+            .select('id')
+            .maybeSingle();
+          dcSiteId = newSite?.id || null;
+        }
+      }
+
+      // 3. Upsert parts
+      const { data: existingParts } = await supabase.from('parts').select('id, part_number');
+      const pMap = new Map((existingParts || []).map(p => [p.part_number.toUpperCase(), p.id]));
+
+      const unitRows = [];
+      for (const u of units) {
+        const cleanPN = String(u.part_number || '').trim().toUpperCase();
+        const cleanSerial = String(u.serial_number || '').trim().toUpperCase();
+        if (!cleanPN || !cleanSerial) continue;
+
+        let pId = pMap.get(cleanPN);
+        if (!pId) {
+          const { data: createdPart } = await supabase.from('parts').upsert({
+            part_number: cleanPN,
+            description: u.description || `Part ${cleanPN}`,
+            ...(defaultCatId ? { category_id: defaultCatId } : {})
+          }, { onConflict: 'part_number' }).select('id').maybeSingle();
+          pId = createdPart?.id;
+          if (pId) pMap.set(cleanPN, pId);
+        }
+
+        if (pId && dcSiteId) {
+          unitRows.push({
+            part_id: pId,
+            current_site_id: dcSiteId,
+            serial_number: cleanSerial,
+            status: u.status || 'in_stock',
+            box_number: u.box_number || 1,
+            notes: u.description || null,
+            received_at: u.received_at || new Date().toISOString()
+          });
+        }
+      }
+
+      if (unitRows.length > 0) {
+        await supabase.from('inventory_units').upsert(unitRows, { onConflict: 'serial_number' });
+      }
+
+      // 4. Synchronize to dc_intake_records table (under MDC_LIVE_DC_STOCK_INTAKE)
+      const liveRecordId = 'MDC_LIVE_DC_STOCK_INTAKE';
+      const { data: existingLiveRecord } = await supabase
+        .from('dc_intake_records')
+        .select('*')
+        .eq('id', liveRecordId)
+        .maybeSingle();
+
+      const itemsMap = new Map();
+      if (existingLiveRecord && Array.isArray(existingLiveRecord.items)) {
+        existingLiveRecord.items.forEach(it => itemsMap.set(String(it.serial_number).toUpperCase(), it));
+      }
+      units.forEach(u => itemsMap.set(String(u.serial_number).toUpperCase(), {
+        id: u.id || `unit-${u.serial_number}`,
+        part_number: u.part_number,
+        description: u.description,
+        serial_number: u.serial_number,
+        received_at: u.received_at || new Date().toISOString(),
+        received_by: u.received_by || currentUser?.fullName || 'Warehouse Staff'
+      }));
+
+      const finalItems = Array.from(itemsMap.values());
+      await supabase.from('dc_intake_records').upsert({
+        id: liveRecordId,
+        record_name: 'Live Scanned DC Stock',
+        intake_date: new Date().toISOString().split('T')[0],
+        total_units: finalItems.length,
+        saved_by_name: currentUser?.fullName || 'Warehouse Staff',
+        notes: 'Real-time live scanned stock intake pool',
+        items: finalItems,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+
+      setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+    } catch (err) {
+      console.warn('saveUnitsToSupabase notice:', err.message);
+      setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
+    }
   };
 
   // 1.1 Batch Scan-In Units (from XLSX/CSV file upload)
@@ -2227,61 +2284,12 @@ export function AppProvider({ children }) {
       } catch (e) {
         console.warn('LocalStorage batch save error:', e);
       }
+      dbStorage.setItem('mdc_inventory', updated);
       return updated;
     });
 
     // Direct Cloud Database Batch Auto-Save
-    if (supabase) {
-      (async () => {
-        setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
-        try {
-          const { data: dbParts } = await supabase.from('parts').select('id, part_number');
-          let dcSiteId = null;
-          const { data: dcSite } = await supabase.from('sites').select('id').or('is_dc.eq.true,code.eq.DC-MDC,code.eq.DC').limit(1).maybeSingle();
-          if (dcSite?.id) {
-            dcSiteId = dcSite.id;
-          } else {
-            const { data: anySite } = await supabase.from('sites').select('id').limit(1).maybeSingle();
-            dcSiteId = anySite?.id || null;
-          }
-
-          const pMap = new Map((dbParts || []).map(p => [p.part_number, p.id]));
-
-          const rows = [];
-          for (const u of newUnits) {
-            let pId = pMap.get(u.part_number);
-            if (!pId) {
-              const { data: createdPart } = await supabase.from('parts').upsert({
-                part_number: u.part_number,
-                description: u.description || `Part ${u.part_number}`
-              }, { onConflict: 'part_number' }).select('id').maybeSingle();
-              pId = createdPart?.id;
-              if (pId) pMap.set(u.part_number, pId);
-            }
-
-            if (pId && dcSiteId) {
-              rows.push({
-                part_id: pId,
-                current_site_id: dcSiteId,
-                serial_number: u.serial_number,
-                status: u.status || 'in_stock',
-                box_number: u.box_number || 1,
-                notes: u.description || null,
-                received_at: u.received_at
-              });
-            }
-          }
-
-          if (rows.length > 0) {
-            await supabase.from('inventory_units').upsert(rows, { onConflict: 'serial_number' });
-          }
-          setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
-        } catch (dbErr) {
-          console.warn('Supabase batch direct save notice:', dbErr.message);
-          setCloudSyncStatus(prev => ({ ...prev, isSaving: false }));
-        }
-      })();
-    }
+    saveUnitsToSupabase(newUnits);
 
     if (poMap.size > 0) {
       setPurchaseOrders(prev => prev.map(po => {
@@ -2367,6 +2375,23 @@ export function AppProvider({ children }) {
         try {
           // Delete from inventory_units
           await supabase.from('inventory_units').delete().eq('serial_number', existing.serial_number);
+
+          // Also remove from MDC_LIVE_DC_STOCK_INTAKE
+          const { data: liveRec } = await supabase
+            .from('dc_intake_records')
+            .select('*')
+            .eq('id', 'MDC_LIVE_DC_STOCK_INTAKE')
+            .maybeSingle();
+
+          if (liveRec && Array.isArray(liveRec.items)) {
+            const filteredLive = liveRec.items.filter(it => String(it.serial_number || '').toUpperCase() !== cleanSerial);
+            await supabase.from('dc_intake_records').upsert({
+              ...liveRec,
+              items: filteredLive,
+              total_units: filteredLive.length,
+              updated_at: new Date().toISOString()
+            });
+          }
           
           // Update affected intake records in Supabase
           for (const rec of recordsToUpdateInDb) {
