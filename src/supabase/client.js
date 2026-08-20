@@ -1,11 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://baowlgyhkokxxmukvafh.supabase.co';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_8OIOWK9FsffO8b4uG8q36Q_gNezmdaB';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = (supabaseUrl && supabaseAnonKey)
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null;
 
 export const checkSupabaseConnection = async () => {
+  if (!supabase) {
+    return {
+      connected: false,
+      message: 'Supabase credentials not configured in .env file (Running in local/offline storage mode)'
+    };
+  }
   try {
     const { data, error } = await supabase.from('parts').select('count', { count: 'exact', head: true });
     if (error) throw error;
@@ -14,3 +22,4 @@ export const checkSupabaseConnection = async () => {
     return { connected: false, message: err.message || 'Running in local/offline storage mode' };
   }
 };
+

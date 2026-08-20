@@ -36,6 +36,9 @@ export default function ScanInReceiving() {
     setInventoryUnits,
     setActiveTab,
     cloudSyncStatus,
+    isAutoRefreshing,
+    lastSyncedAt,
+    autoRefreshData,
     showToast
   } = useApp();
 
@@ -714,13 +717,35 @@ export default function ScanInReceiving() {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <h3 style={{ margin: 0 }}>Received DC Stock & Intake History</h3>
-              <span className="badge" style={{ background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
-                <Check size={11} style={{ display: 'inline', marginRight: '3px' }} />
-                Database Persisted
+              <span
+                className="badge"
+                style={{
+                  background: isAutoRefreshing ? '#f0f9ff' : '#ecfdf5',
+                  color: isAutoRefreshing ? '#0284c7' : '#047857',
+                  border: `1px solid ${isAutoRefreshing ? '#7dd3fc' : '#a7f3d0'}`,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  transition: 'all 0.2s ease'
+                }}
+                title={isAutoRefreshing ? "Auto-refreshing latest inventory from database..." : "Data auto-refreshed on page visit and synced with database"}
+              >
+                {isAutoRefreshing ? (
+                  <>
+                    <RefreshCw size={11} className="spin" />
+                    <span>Auto-Refreshing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check size={11} />
+                    <span>Live Synced</span>
+                  </>
+                )}
               </span>
             </div>
             <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
               Total DC In-Stock Units: <strong>{availableInStockUnits.length}</strong> • Recent Session Intake: <strong>{sessionScans.length}</strong>
+              {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
             </p>
           </div>
 
@@ -744,7 +769,7 @@ export default function ScanInReceiving() {
             </div>
 
             {/* Quick Search */}
-            <div style={{ position: 'relative', minWidth: '220px' }}>
+            <div style={{ position: 'relative', minWidth: '200px' }}>
               <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 type="text"
@@ -755,6 +780,18 @@ export default function ScanInReceiving() {
                 style={{ paddingLeft: '30px', paddingRight: '10px', height: '34px', fontSize: '12.5px', width: '100%' }}
               />
             </div>
+
+            {/* Quick Manual Refresh Button */}
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'ScanInReceiving manual refresh' })}
+              disabled={isAutoRefreshing}
+              title="Force reload latest inventory from database"
+              style={{ height: '34px', display: 'flex', alignItems: 'center', gap: '5px' }}
+            >
+              <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
+              <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
+            </button>
 
             {sessionScans.length > 0 && activeTableView === 'SESSION_SCANS' && (
               <button className="btn btn-secondary btn-sm" onClick={handleClearSessionHistory} style={{ height: '34px' }}>

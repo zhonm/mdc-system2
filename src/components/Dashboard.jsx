@@ -25,7 +25,8 @@ import {
   ChevronRight,
   Package,
   Calendar,
-  Check
+  Check,
+  RefreshCw
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -64,6 +65,9 @@ export default function Dashboard() {
     cloudSyncStatus,
     activePeriod,
     setActiveTab,
+    isAutoRefreshing,
+    lastSyncedAt,
+    autoRefreshData,
     selectedCategory
   } = useApp();
 
@@ -279,10 +283,33 @@ export default function Dashboard() {
 
           {/* System Telemetry Badges */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-            <div
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'Dashboard manual refresh' })}
+              disabled={isAutoRefreshing}
+              title="Force reload all operational data from database"
               style={{
                 background: 'rgba(15, 23, 42, 0.6)',
                 border: '1px solid #334155',
+                color: '#38bdf8',
+                padding: '6px 14px',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
+              <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
+            </button>
+
+            <div
+              style={{
+                background: 'rgba(15, 23, 42, 0.6)',
+                border: `1px solid ${isAutoRefreshing ? '#38bdf8' : '#334155'}`,
                 padding: '6px 14px',
                 borderRadius: '8px',
                 display: 'flex',
@@ -290,9 +317,18 @@ export default function Dashboard() {
                 gap: '8px',
                 fontSize: '12px'
               }}
+              title={lastSyncedAt ? `Last verified: ${new Date(lastSyncedAt).toLocaleTimeString()}` : 'Connected to Supabase'}
             >
-              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#34d399', boxShadow: '0 0 8px #34d399' }} />
-              <span style={{ color: '#e2e8f0', fontWeight: 600 }}>Supabase PostgreSQL Live</span>
+              <div style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: isAutoRefreshing ? '#38bdf8' : '#34d399',
+                boxShadow: `0 0 8px ${isAutoRefreshing ? '#38bdf8' : '#34d399'}`
+              }} />
+              <span style={{ color: '#e2e8f0', fontWeight: 600 }}>
+                {isAutoRefreshing ? 'Auto-Refreshing DB...' : 'Supabase PostgreSQL Live'}
+              </span>
             </div>
 
             <div

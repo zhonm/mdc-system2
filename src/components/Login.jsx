@@ -3,8 +3,9 @@ import { useApp } from '../context/AppContext';
 import { Lock, ArrowRight, Eye, EyeOff, AlertCircle, RefreshCw, Mail, ShieldCheck } from 'lucide-react';
 import { Turnstile } from '@marsidev/react-turnstile';
 import mobileCareLogo from '../assets/mobilecare_logo.png';
+import { loginRateLimiter } from '../utils/security';
 
-const TURNSTILE_SITE_KEY = import.meta.env.VITE_CLOUDFLARE_TURNSTILE_SITE_KEY || '0x4AAAAAAEVDHe8fyHEMI2fu';
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_CLOUDFLARE_TURNSTILE_SITE_KEY || '';
 
 export default function Login() {
   const { verifyLoginEmail, signInWithPassword, setPendingFirstTimeUser, showToast } = useApp();
@@ -24,6 +25,13 @@ export default function Login() {
     e.preventDefault();
     if (!emailInput.trim()) {
       setErrorMessage('Please enter your company email address');
+      return;
+    }
+
+    // Check brute-force lockout status
+    const rateCheck = loginRateLimiter.checkLimit(emailInput.trim().toLowerCase());
+    if (!rateCheck.allowed) {
+      setErrorMessage(rateCheck.message);
       return;
     }
 
@@ -61,7 +69,14 @@ export default function Login() {
       return;
     }
 
-    if (!turnstileToken) {
+    // Check brute-force lockout status
+    const rateCheck = loginRateLimiter.checkLimit(emailInput.trim().toLowerCase());
+    if (!rateCheck.allowed) {
+      setErrorMessage(rateCheck.message);
+      return;
+    }
+
+    if (TURNSTILE_SITE_KEY && !turnstileToken) {
       setErrorMessage('Please verify that you are not a robot.');
       return;
     }
@@ -72,7 +87,14 @@ export default function Login() {
     try {
       const res = await signInWithPassword(emailInput, passwordInput, turnstileToken);
       if (!res.success) {
-        setErrorMessage(res.error);
+        const failState = loginRateLimiter.recordFailure(emailInput.trim().toLowerCase());
+        if (failState.locked) {
+          setErrorMessage(`Too many failed attempts. Security lockout active for 60 seconds.`);
+        } else {
+          setErrorMessage(`${res.error} (${failState.remainingAttempts} attempts remaining)`);
+        }
+      } else {
+        loginRateLimiter.recordSuccess(emailInput.trim().toLowerCase());
       }
     } catch (err) {
       setErrorMessage(err.message || 'Authentication failed');
@@ -250,23 +272,25 @@ export default function Login() {
             </div>
 
             {/* Cloudflare Turnstile Verification Widget */}
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '18px' }}>
-              <Turnstile
-                siteKey={TURNSTILE_SITE_KEY}
-                options={{
-                  theme: 'dark',
-                  size: 'normal'
-                }}
-                onSuccess={(token) => {
-                  setTurnstileToken(token);
-                  if (errorMessage) setErrorMessage('');
-                }}
-                onExpire={() => setTurnstileToken('')}
-                onError={() => {
-                  setErrorMessage('Verification check failed. Please refresh or retry.');
-                }}
-              />
-            </div>
+            {TURNSTILE_SITE_KEY ? (
+              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '18px' }}>
+                <Turnstile
+                  siteKey={TURNSTILE_SITE_KEY}
+                  options={{
+                    theme: 'dark',
+                    size: 'normal'
+                  }}
+                  onSuccess={(token) => {
+                    setTurnstileToken(token);
+                    if (errorMessage) setErrorMessage('');
+                  }}
+                  onExpire={() => setTurnstileToken('')}
+                  onError={() => {
+                    setErrorMessage('Verification check failed. Please refresh or retry.');
+                  }}
+                />
+              </div>
+            ) : null}
 
             {errorMessage && (
               <div

@@ -17,7 +17,8 @@ import {
   FileSpreadsheet,
   X,
   Tag,
-  Plus
+  Plus,
+  RefreshCw
 } from 'lucide-react';
 
 export default function IntakeRecords() {
@@ -26,6 +27,9 @@ export default function IntakeRecords() {
     deleteIntakeRecord,
     inventoryUnits,
     setActiveTab,
+    isAutoRefreshing,
+    lastSyncedAt,
+    autoRefreshData,
     showToast
   } = useApp();
 
@@ -254,13 +258,59 @@ export default function IntakeRecords() {
               <BookmarkPlus size={24} color="#38bdf8" />
             </div>
             <h2 style={{ color: '#fff', margin: 0, fontSize: '22px' }}>DC Intake Batch Records</h2>
+            <span
+              className="badge"
+              style={{
+                background: isAutoRefreshing ? 'rgba(56, 189, 248, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+                color: isAutoRefreshing ? '#38bdf8' : '#34d399',
+                border: `1px solid ${isAutoRefreshing ? 'rgba(56, 189, 248, 0.4)' : 'rgba(52, 211, 153, 0.4)'}`,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontSize: '11.5px',
+                padding: '3px 8px'
+              }}
+              title={isAutoRefreshing ? "Auto-refreshing latest intake records from database..." : "Data is auto-refreshed on page visit and synchronized across all accounts"}
+            >
+              {isAutoRefreshing ? (
+                <>
+                  <RefreshCw size={11} className="spin" />
+                  <span>Auto-Refreshing...</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 size={11} />
+                  <span>Live Synced</span>
+                </>
+              )}
+            </span>
           </div>
           <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0 }}>
             Standardized Intake History (<code>MDC[YYYY][00000]</code>) • Serialized Part Tracking • Cloud Database Persisted
+            {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'IntakeRecords manual refresh' })}
+            disabled={isAutoRefreshing}
+            title="Force reload latest intake records from database"
+            style={{
+              background: '#1e293b',
+              color: '#38bdf8',
+              borderColor: '#38bdf8',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              height: '36px'
+            }}
+          >
+            <RefreshCw size={14} className={isAutoRefreshing ? 'spin' : ''} />
+            <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
+          </button>
           <button
             className="btn btn-secondary btn-sm"
             onClick={() => setActiveTab('scan-in')}

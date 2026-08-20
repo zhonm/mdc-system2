@@ -12,7 +12,9 @@ export default function Header() {
     searchQuery,
     setSearchQuery,
     cloudSyncStatus,
-    refreshDataFromCloud,
+    isAutoRefreshing,
+    lastSyncedAt,
+    autoRefreshData,
     showToast,
     activePeriod
   } = useApp();
@@ -22,14 +24,14 @@ export default function Header() {
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
-      if (refreshDataFromCloud) {
-        await refreshDataFromCloud();
+      if (autoRefreshData) {
+        await autoRefreshData({ force: true, silent: false, reason: 'Header manual sync' });
       }
     } catch (err) {
       console.error('Manual sync error:', err);
       showToast('Error syncing with cloud database', 'error');
     } finally {
-      setTimeout(() => setIsSyncing(false), 800);
+      setTimeout(() => setIsSyncing(false), 500);
     }
   };
 
@@ -49,6 +51,8 @@ export default function Header() {
     settings: 'Parts Catalog & Site Configuration',
     'user-access': 'User Access & Permissions Management'
   };
+
+  const formattedSyncTime = lastSyncedAt ? new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Just now';
 
   return (
     <header className="header-bar no-print">
@@ -83,34 +87,60 @@ export default function Header() {
       </div>
 
       <div className="header-right">
-        {/* Google Sheets-style Live Cloud Auto-Save Indicator */}
+        {/* Live Cloud DB Auto-Refresh & Auto-Save Indicator */}
         <div
           style={{
             display: 'inline-flex',
             alignItems: 'center',
             gap: '6px',
-            background: cloudSyncStatus?.isSaving ? 'rgba(56, 189, 248, 0.12)' : 'rgba(16, 185, 129, 0.1)',
-            border: `1px solid ${cloudSyncStatus?.isSaving ? '#38bdf8' : 'rgba(16, 185, 129, 0.3)'}`,
+            background: isAutoRefreshing
+              ? 'rgba(56, 189, 248, 0.15)'
+              : cloudSyncStatus?.isSaving
+              ? 'rgba(245, 158, 11, 0.15)'
+              : 'rgba(16, 185, 129, 0.1)',
+            border: `1px solid ${
+              isAutoRefreshing
+                ? '#38bdf8'
+                : cloudSyncStatus?.isSaving
+                ? '#f59e0b'
+                : 'rgba(16, 185, 129, 0.3)'
+            }`,
             borderRadius: 'var(--radius-full)',
             padding: '5px 12px',
             fontSize: '12px',
-            color: cloudSyncStatus?.isSaving ? '#0284c7' : '#059669',
+            color: isAutoRefreshing
+              ? '#0284c7'
+              : cloudSyncStatus?.isSaving
+              ? '#d97706'
+              : '#059669',
             fontWeight: 600,
             cursor: 'default',
             whiteSpace: 'nowrap',
-            flexShrink: 0
+            flexShrink: 0,
+            transition: 'all 0.2s ease'
           }}
-          title={cloudSyncStatus?.isSaving ? "Saving changes directly to Supabase Cloud Database..." : "All changes are automatically saved to Supabase Cloud Database"}
+          title={
+            isAutoRefreshing
+              ? "Auto-refreshing latest synchronized data from database..."
+              : cloudSyncStatus?.isSaving
+              ? "Saving changes to database..."
+              : `Synchronized with Supabase DB. Last verified at ${formattedSyncTime}`
+          }
         >
-          {cloudSyncStatus?.isSaving ? (
+          {isAutoRefreshing ? (
             <>
               <RefreshCw size={13} className="spin" color="#0284c7" />
+              <span>Auto-refreshing...</span>
+            </>
+          ) : cloudSyncStatus?.isSaving ? (
+            <>
+              <RefreshCw size={13} className="spin" color="#d97706" />
               <span>Saving...</span>
             </>
           ) : (
             <>
               <CheckCircle2 size={13} color="#10b981" />
-              <span>Cloud Synced</span>
+              <span>Live DB Synced</span>
             </>
           )}
         </div>
@@ -129,12 +159,12 @@ export default function Header() {
         <button
           className="btn btn-secondary btn-sm"
           onClick={handleManualSync}
-          disabled={isSyncing}
-          title="Synchronize and refresh all latest live data from Supabase Cloud Database"
+          disabled={isSyncing || isAutoRefreshing}
+          title="Force refresh latest data from Supabase Cloud Database"
           style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.3)' }}
         >
-          {isSyncing ? <RefreshCw size={14} className="spin" /> : <Database size={14} />}
-          <span>{isSyncing ? 'Syncing...' : 'Sync Cloud DB'}</span>
+          {isSyncing || isAutoRefreshing ? <RefreshCw size={14} className="spin" /> : <Database size={14} />}
+          <span>{isSyncing || isAutoRefreshing ? 'Syncing...' : 'Sync Cloud DB'}</span>
         </button>
 
         <button

@@ -22,7 +22,8 @@ import {
   X,
   Smartphone,
   BatteryCharging,
-  DollarSign
+  DollarSign,
+  RefreshCw
 } from 'lucide-react';
 
 const MONTH_NAMES = [
@@ -43,6 +44,9 @@ export default function SavedRecords() {
     forecastItems,
     allocations,
     sites,
+    isAutoRefreshing,
+    lastSyncedAt,
+    autoRefreshData,
     showToast
   } = useApp();
 
@@ -155,20 +159,63 @@ export default function SavedRecords() {
                 <BookmarkCheck size={20} />
               </div>
               <div>
-                <h2 style={{ fontSize: '18px', margin: 0, fontWeight: 700, color: 'var(--text-main)' }}>
-                  Saved Period Records & Historical Archives
-                </h2>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <h2 style={{ fontSize: '18px', margin: 0, fontWeight: 700, color: 'var(--text-main)' }}>
+                    Saved Period Records & Historical Archives
+                  </h2>
+                  <span
+                    className="badge"
+                    style={{
+                      background: isAutoRefreshing ? '#f0f9ff' : '#ecfdf5',
+                      color: isAutoRefreshing ? '#0284c7' : '#047857',
+                      border: `1px solid ${isAutoRefreshing ? '#7dd3fc' : '#a7f3d0'}`,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '11.5px',
+                      padding: '3px 8px',
+                      transition: 'all 0.2s ease'
+                    }}
+                    title={isAutoRefreshing ? "Auto-refreshing latest saved records from database..." : "Records are auto-refreshed on page visit and synchronized across all accounts"}
+                  >
+                    {isAutoRefreshing ? (
+                      <>
+                        <RefreshCw size={11} className="spin" />
+                        <span>Auto-Refreshing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 size={11} />
+                        <span>Live Synced</span>
+                      </>
+                    )}
+                  </span>
+                </div>
                 <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0, marginTop: '2px' }}>
                   Permanent, immutable snapshots of Demand Forecasting & Master Allocation matrices across weeks and months.
+                  {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
                 </p>
               </div>
             </div>
           </div>
 
-          <button className="btn btn-primary" onClick={() => setShowSaveModal(true)}>
-            <BookmarkPlus size={16} />
-            <span>Save Current Working Data as Record</span>
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'SavedRecords manual refresh' })}
+              disabled={isAutoRefreshing}
+              title="Force reload saved records from database"
+              style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
+            >
+              <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
+              <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
+            </button>
+
+            <button className="btn btn-primary btn-sm" onClick={() => setShowSaveModal(true)} style={{ height: '36px' }}>
+              <BookmarkPlus size={16} />
+              <span>Save Current Working Data as Record</span>
+            </button>
+          </div>
         </div>
 
         {/* High-Contrast KPI Cards */}

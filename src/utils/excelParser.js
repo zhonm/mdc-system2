@@ -4,6 +4,7 @@ import canonicalShares from '../data/canonicalShares.js';
 import canonicalAugustAllocations from '../data/canonicalAllocations.js';
 import { calculateLinearRegressionForecast, calculateRecommendedOrder } from './forecastEngine.js';
 import { calculateProportionalAllocation, calculate2DCumulativeAllocation, calculateWeeklySplit } from './allocationEngine.js';
+import { sanitizeForSpreadsheet } from './security.js';
 
 export function isForecastingMatrixSheet(rows) {
   for (let r = 0; r < Math.min(6, rows.length); r++) {
@@ -2148,9 +2149,9 @@ export async function exportForecastToExcel(forecastItems, period = 'September 2
     const computedVal = item.computed_forecast !== undefined ? item.computed_forecast : calculateLinearRegressionForecast(monthlySlice, monthlySlice.length + 1);
 
     const rowData = [
-      commodity,
-      item.part_number,
-      item.description,
+      sanitizeForSpreadsheet(commodity),
+      sanitizeForSpreadsheet(item.part_number),
+      sanitizeForSpreadsheet(item.description),
       ...monthlySlice,
       computedVal,
       item.admin_override !== null && item.admin_override !== undefined ? item.admin_override : '',

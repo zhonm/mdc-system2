@@ -20,7 +20,8 @@ import {
   CheckCircle2,
   Smartphone,
   BatteryCharging,
-  BookmarkPlus
+  BookmarkPlus,
+  RefreshCw
 } from 'lucide-react';
 
 const CANONICAL_SITE_CODES = [
@@ -40,6 +41,9 @@ export default function AllocationMatrix() {
     runAutoAllocation,
     inventoryUnits,
     setActiveTab,
+    isAutoRefreshing,
+    lastSyncedAt,
+    autoRefreshData,
     showToast,
     activePeriod
   } = useApp();
@@ -369,17 +373,59 @@ export default function AllocationMatrix() {
                 <Split size={18} />
               </div>
               <div>
-                <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#0f172a' }}>
-                  Master Parts Allocation Matrix
-                </h3>
-                <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0, marginTop: '2px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: '#0f172a' }}>
+                    Master Parts Allocation Matrix
+                  </h3>
+                  <span
+                    className="badge"
+                    style={{
+                      background: isAutoRefreshing ? '#f0f9ff' : '#ecfdf5',
+                      color: isAutoRefreshing ? '#0284c7' : '#047857',
+                      border: `1px solid ${isAutoRefreshing ? '#7dd3fc' : '#a7f3d0'}`,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '11.5px',
+                      padding: '3px 8px',
+                      transition: 'all 0.2s ease'
+                    }}
+                    title={isAutoRefreshing ? "Auto-refreshing latest allocation matrix from database..." : "Allocation data is auto-refreshed on page visit and synchronized across all accounts"}
+                  >
+                    {isAutoRefreshing ? (
+                      <>
+                        <RefreshCw size={11} className="spin" />
+                        <span>Auto-Refreshing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 size={11} />
+                        <span>Live Synced</span>
+                      </>
+                    )}
+                  </span>
+                </div>
+                <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0, marginTop: '3px' }}>
                   Multi-site proportional distribution across 26 branches matching Google Sheet Master Allocation structure.
+                  {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
                 </p>
               </div>
             </div>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            {/* Quick Manual Refresh Button */}
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'AllocationMatrix manual refresh' })}
+              disabled={isAutoRefreshing}
+              title="Force reload latest allocation matrix from database"
+              style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600, padding: '6px 14px' }}
+            >
+              <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
+              <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
+            </button>
+
             {/* View Mode Switcher */}
             <div style={{ display: 'flex', background: '#f1f5f9', borderRadius: 'var(--radius-sm)', padding: '3px', border: '1px solid #e2e8f0' }}>
               <button

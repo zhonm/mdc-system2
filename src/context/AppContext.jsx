@@ -6,6 +6,7 @@ import { calculateProportionalAllocation, calculateWeeklySplit } from '../utils/
 import { barcodeAudio } from '../utils/barcodeAudio';
 import { supabase } from '../supabase/client';
 import dbStorage from '../utils/dbStorage';
+import { hashPassword, verifyPassword, sanitizeInput } from '../utils/security';
 
 const AppContext = createContext();
 
@@ -450,10 +451,20 @@ export function AppProvider({ children }) {
       console.warn('Supabase Auth sign-in response:', e?.message || e);
     }
 
-    // Verify password (Accepts configured password or default 'Password123')
-    if (user.passwordHash && user.passwordHash !== password && password !== 'Password123') {
+    // Securely verify password with cryptographic hash comparison
+    const isPasswordValid = await verifyPassword(password, user.passwordHash);
+    if (!isPasswordValid) {
       barcodeAudio.playError();
       return { success: false, error: 'Incorrect password. Please try again or reset password.' };
+    }
+
+    // Auto-upgrade legacy plaintext password to SHA-256 hash
+    if (!user.passwordHash?.startsWith('sha256:')) {
+      const secureHash = await hashPassword(password);
+      user.passwordHash = secureHash;
+      if (supabase) {
+        supabase.from('profiles').update({ password_hash: secureHash }).eq('id', user.id).then(() => {}).catch(() => {});
+      }
     }
 
     setCurrentUser(user);
@@ -473,13 +484,19 @@ export function AppProvider({ children }) {
       return { success: false, error: 'User profile not found' };
     }
 
+    const secureHash = await hashPassword(newPassword);
+
     // Try updating Supabase auth user & profile
     try {
       if (supabase) {
         await supabase.auth.updateUser({ password: newPassword });
         await supabase
           .from('profiles')
-          .update({ has_set_password: true, updated_at: new Date().toISOString() })
+          .update({
+            has_set_password: true,
+            password_hash: secureHash,
+            updated_at: new Date().toISOString()
+          })
           .or(`id.eq.${user.id},email.ilike.${user.email}`);
       }
     } catch (e) {
@@ -489,7 +506,7 @@ export function AppProvider({ children }) {
     const updatedUser = {
       ...user,
       hasSetPassword: true,
-      passwordHash: newPassword
+      passwordHash: secureHash
     };
 
     setUsersList(prev => prev.map(u => (u.id === user.id ? updatedUser : u)));
@@ -862,15 +879,22 @@ export function AppProvider({ children }) {
 
   // 11. Superadmin Password Reset for All Accounts (including self)
   const resetUserPassword = async (userId, { newPassword, requireNextLoginReset = false }) => {
+    // Authorization guard: Superadmin or self only
+    if (currentUser && currentUser.role !== 'superadmin' && currentUser.id !== userId) {
+      showToast('Unauthorized: Only Superadmins can reset passwords for other users.', 'error');
+      return { success: false, error: 'Unauthorized' };
+    }
+
     const target = usersList.find(u => u.id === userId);
     if (!target) return { success: false, error: 'User not found' };
 
     const finalPassword = String(newPassword || '').trim() || 'Password123';
     const hasSet = !requireNextLoginReset;
+    const secureHash = await hashPassword(finalPassword);
 
     const updatedUser = {
       ...target,
-      passwordHash: finalPassword,
+      passwordHash: secureHash,
       hasSetPassword: hasSet
     };
 
@@ -898,6 +922,7 @@ export function AppProvider({ children }) {
           .from('profiles')
           .update({
             has_set_password: hasSet,
+            password_hash: secureHash,
             updated_at: new Date().toISOString()
           })
           .or(`id.eq.${userId},email.ilike.${target.email}`);
@@ -1328,17 +1353,51 @@ export function AppProvider({ children }) {
     } catch (e) {}
   }, [categories, sites, parts, forecastItems, allocations, inventoryUnits, purchaseOrders, shipments, scanLogs, repairUsageRecords, stockTransferReports, stockTransferMetadata, uploadAuditLogs, activePeriod]);
 
-  // Top-level Supabase Hydration function
+  const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState(() => new Date());
+  const lastRefreshTimeRef = React.useRef(0);
+
+  // Top-level Optimized Parallel Supabase Hydration function
   const hydrateFromSupabase = async () => {
     if (!supabase) return;
     try {
       const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
 
-      // 1. Hydrate User Profiles & Permissions from Supabase
-      const { data: dbProfiles } = await supabase.from('profiles').select('*');
-      if (dbProfiles && dbProfiles.length > 0) {
-        const { data: dbPerms } = await supabase.from('user_page_permissions').select('*');
+      // Execute all independent database queries simultaneously in parallel for instant sub-second response
+      const [
+        dbProfilesRes,
+        dbPermsRes,
+        dbSitesRes,
+        dbPartsRes,
+        dbForecastsRes,
+        dbAllocationsRes,
+        dbRecordsRes,
+        dbIntakesRes,
+        dbUnitsRes
+      ] = await Promise.allSettled([
+        supabase.from('profiles').select('*'),
+        supabase.from('user_page_permissions').select('*'),
+        supabase.from('sites').select('*'),
+        supabase.from('parts').select('*, part_categories(name, code)'),
+        supabase.from('forecast_entries').select('*, parts(part_number, description)'),
+        supabase.from('allocation_items').select('*, parts(part_number, description), sites(id, code)'),
+        supabase.from('saved_records').select('*').order('created_at', { ascending: false }).limit(100),
+        supabase.from('dc_intake_records').select('*').order('created_at', { ascending: false }).limit(200),
+        supabase.from('inventory_units').select('*').order('received_at', { ascending: false }).limit(2000)
+      ]);
 
+      const dbProfiles = dbProfilesRes.status === 'fulfilled' ? dbProfilesRes.value?.data : null;
+      const dbPerms = dbPermsRes.status === 'fulfilled' ? dbPermsRes.value?.data : null;
+      const dbSites = dbSitesRes.status === 'fulfilled' ? dbSitesRes.value?.data : null;
+      const dbParts = dbPartsRes.status === 'fulfilled' ? dbPartsRes.value?.data : null;
+      const dbForecasts = dbForecastsRes.status === 'fulfilled' ? dbForecastsRes.value?.data : null;
+      const dbAllocations = dbAllocationsRes.status === 'fulfilled' ? dbAllocationsRes.value?.data : null;
+      const dbRecords = dbRecordsRes.status === 'fulfilled' ? dbRecordsRes.value?.data : null;
+      const dbIntakes = dbIntakesRes.status === 'fulfilled' ? dbIntakesRes.value?.data : null;
+      const dbUnits = dbUnitsRes.status === 'fulfilled' ? dbUnitsRes.value?.data : null;
+
+      // 1. Hydrate User Profiles & Permissions from Supabase
+      if (dbProfiles && dbProfiles.length > 0) {
         // Clean up any legacy mock profiles from Supabase if found
         const legacyDbRows = dbProfiles.filter(p =>
           LEGACY_MOCK_EMAILS.includes(p.email?.toLowerCase()) ||
@@ -1408,7 +1467,6 @@ export function AppProvider({ children }) {
       }
 
       // 2. Hydrate Sites from Supabase
-      const { data: dbSites } = await supabase.from('sites').select('*');
       if (dbSites && dbSites.length > 0) {
         setSites(prev => {
           const map = new Map((prev || []).map(s => [s.code, s]));
@@ -1442,7 +1500,6 @@ export function AppProvider({ children }) {
       }
 
       // 3. Hydrate Parts Catalog from Supabase
-      const { data: dbParts } = await supabase.from('parts').select('*, part_categories(name, code)');
       if (dbParts && dbParts.length > 0) {
         setParts(prev => {
           const map = new Map((prev || []).map(p => [p.part_number, p]));
@@ -1469,10 +1526,6 @@ export function AppProvider({ children }) {
       }
 
       // 4. Hydrate Forecast Entries from Supabase
-      const { data: dbForecasts } = await supabase
-        .from('forecast_entries')
-        .select('*, parts(part_number, description)');
-
       if (dbForecasts && dbForecasts.length > 0) {
         const mappedForecast = dbForecasts.map(f => ({
           part_id: f.part_id,
@@ -1492,10 +1545,6 @@ export function AppProvider({ children }) {
       }
 
       // 5. Hydrate Allocation Items from Supabase
-      const { data: dbAllocations } = await supabase
-        .from('allocation_items')
-        .select('*, parts(part_number, description), sites(id, code)');
-
       if (dbAllocations && dbAllocations.length > 0) {
         const allocMap = new Map();
         dbAllocations.forEach(item => {
@@ -1535,12 +1584,6 @@ export function AppProvider({ children }) {
       }
 
       // 6. Hydrate Live Master Record and Saved Period Records from Supabase
-      const { data: dbRecords } = await supabase
-        .from('saved_records')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100);
-
       if (dbRecords && dbRecords.length > 0) {
         // Check for Live Master Record Snapshot (multi-user synchronized state)
         const liveMaster = dbRecords.find(r => r.id === LIVE_MASTER_RECORD_ID);
@@ -1586,6 +1629,10 @@ export function AppProvider({ children }) {
               return merged;
             });
           }
+          if (snap.activePeriod && snap.activePeriod.label) {
+            setActivePeriod(snap.activePeriod);
+            try { localStorage.setItem('mdc_active_period', JSON.stringify(snap.activePeriod)); } catch (e) {}
+          }
         }
 
         // Historical saved records (excluding the live master record)
@@ -1620,148 +1667,164 @@ export function AppProvider({ children }) {
 
       // 7. Hydrate DC Intake Records from Supabase
       let fetchedIntakes = [];
-      try {
-        const { data: dbIntakes } = await supabase
-          .from('dc_intake_records')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(200);
-
-        if (dbIntakes && dbIntakes.length > 0) {
-          fetchedIntakes = dbIntakes;
-          setDcIntakeRecords(prev => {
-            const map = new Map((prev || []).map(r => [r.id, r]));
-            dbIntakes.forEach(dbI => {
-              map.set(dbI.id, {
-                id: dbI.id,
-                record_name: dbI.record_name || dbI.id,
-                intake_date: dbI.intake_date,
-                po_id: dbI.po_id,
-                po_number: dbI.po_number,
-                supplier: dbI.supplier,
-                total_units: dbI.total_units || (Array.isArray(dbI.items) ? dbI.items.length : 0),
-                saved_by_name: dbI.saved_by_name || 'Warehouse Staff',
-                saved_by_user_id: dbI.saved_by_user_id,
-                notes: dbI.notes || '',
-                category_breakdown: dbI.category_breakdown || {},
-                items: Array.isArray(dbI.items) ? dbI.items : [],
-                created_at: dbI.created_at,
-                updated_at: dbI.updated_at
-              });
+      if (dbIntakes && dbIntakes.length > 0) {
+        fetchedIntakes = dbIntakes;
+        setDcIntakeRecords(prev => {
+          const map = new Map((prev || []).map(r => [r.id, r]));
+          dbIntakes.forEach(dbI => {
+            map.set(dbI.id, {
+              id: dbI.id,
+              record_name: dbI.record_name || dbI.id,
+              intake_date: dbI.intake_date,
+              po_id: dbI.po_id,
+              po_number: dbI.po_number,
+              supplier: dbI.supplier,
+              total_units: dbI.total_units || (Array.isArray(dbI.items) ? dbI.items.length : 0),
+              saved_by_name: dbI.saved_by_name || 'Warehouse Staff',
+              saved_by_user_id: dbI.saved_by_user_id,
+              notes: dbI.notes || '',
+              category_breakdown: dbI.category_breakdown || {},
+              items: Array.isArray(dbI.items) ? dbI.items : [],
+              created_at: dbI.created_at,
+              updated_at: dbI.updated_at
             });
-            const merged = Array.from(map.values()).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-            try {
-              localStorage.setItem('mdc_dc_intake_records', JSON.stringify(merged.slice(0, 100)));
-            } catch (e) {}
-            return merged;
           });
-        }
-      } catch (intakeErr) {
-        console.warn('dc_intake_records fetch note:', intakeErr.message);
+          const merged = Array.from(map.values()).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+          try {
+            localStorage.setItem('mdc_dc_intake_records', JSON.stringify(merged.slice(0, 100)));
+          } catch (e) {}
+          return merged;
+        });
       }
 
       // 8. Hydrate Serialized Inventory Units from Supabase (Central Multi-User Source of Truth)
-      try {
-        const { data: dbUnits } = await supabase
-          .from('inventory_units')
-          .select('*')
-          .order('received_at', { ascending: false })
-          .limit(2000);
+      setInventoryUnits(prev => {
+        const map = new Map();
 
-        setInventoryUnits(prev => {
-          const map = new Map();
+        // 8a. Add units from inventory_units table
+        if (dbUnits && dbUnits.length > 0) {
+          dbUnits.forEach(dbU => {
+            const cleanSerial = String(dbU.serial_number || '').toUpperCase();
+            map.set(cleanSerial, {
+              id: dbU.id,
+              part_id: dbU.part_id,
+              part_number: dbU.part_number || dbU.notes || 'PART',
+              description: dbU.description || dbU.notes || 'Service Replacement Part',
+              serial_number: dbU.serial_number,
+              current_site_id: dbU.current_site_id || 'site-dc',
+              site_code: dbU.site_code || 'DC-MDC',
+              po_id: dbU.po_id,
+              status: dbU.status || 'in_stock',
+              box_number: dbU.box_number || 1,
+              received_at: dbU.received_at,
+              received_by: dbU.received_by_name || 'Warehouse Staff',
+              allocated_at: dbU.allocated_at,
+              shipped_at: dbU.shipped_at,
+              notes: dbU.notes
+            });
+          });
+        }
 
-          // 8a. Add units from inventory_units table
-          if (dbUnits && dbUnits.length > 0) {
-            dbUnits.forEach(dbU => {
-              const cleanSerial = String(dbU.serial_number || '').toUpperCase();
-              map.set(cleanSerial, {
-                id: dbU.id,
-                part_id: dbU.part_id,
-                part_number: dbU.part_number || dbU.notes || 'PART',
-                description: dbU.description || dbU.notes || 'Service Replacement Part',
-                serial_number: dbU.serial_number,
-                current_site_id: dbU.current_site_id || 'site-dc',
-                site_code: dbU.site_code || 'DC-MDC',
-                po_id: dbU.po_id,
-                status: dbU.status || 'in_stock',
-                box_number: dbU.box_number || 1,
-                received_at: dbU.received_at,
-                received_by: dbU.received_by_name || 'Warehouse Staff',
-                allocated_at: dbU.allocated_at,
-                shipped_at: dbU.shipped_at,
-                notes: dbU.notes
-              });
+        // 8b. Add units from all saved intake records in dc_intake_records (guarantees cross-account visibility)
+        const allIntakeSources = fetchedIntakes && fetchedIntakes.length > 0 ? fetchedIntakes : (dcIntakeRecords || []);
+        allIntakeSources.forEach(rec => {
+          if (Array.isArray(rec.items)) {
+            rec.items.forEach(it => {
+              const cleanSerial = String(it.serial_number || '').toUpperCase();
+              if (!map.has(cleanSerial)) {
+                map.set(cleanSerial, {
+                  id: it.id || `unit-${cleanSerial}`,
+                  part_id: it.part_id || `part-${it.part_number}`,
+                  part_number: it.part_number,
+                  description: it.description || 'Service Replacement Part',
+                  serial_number: it.serial_number,
+                  current_site_id: 'site-dc',
+                  site_code: 'DC-MDC',
+                  po_id: it.po_id || rec.po_id || null,
+                  status: 'in_stock',
+                  box_number: 1,
+                  received_at: it.received_at || rec.intake_date || new Date().toISOString(),
+                  received_by: it.received_by || rec.saved_by_name || 'Warehouse Staff',
+                  intake_record_id: rec.id
+                });
+              }
             });
           }
-
-          // 8b. Add units from all saved intake records in dc_intake_records (guarantees cross-account visibility)
-          const allIntakeSources = fetchedIntakes && fetchedIntakes.length > 0 ? fetchedIntakes : (dcIntakeRecords || []);
-          allIntakeSources.forEach(rec => {
-            if (Array.isArray(rec.items)) {
-              rec.items.forEach(it => {
-                const cleanSerial = String(it.serial_number || '').toUpperCase();
-                if (!map.has(cleanSerial)) {
-                  map.set(cleanSerial, {
-                    id: it.id || `unit-${cleanSerial}`,
-                    part_id: it.part_id || `part-${it.part_number}`,
-                    part_number: it.part_number,
-                    description: it.description || 'Service Replacement Part',
-                    serial_number: it.serial_number,
-                    current_site_id: 'site-dc',
-                    site_code: 'DC-MDC',
-                    po_id: it.po_id || rec.po_id || null,
-                    status: 'in_stock',
-                    box_number: 1,
-                    received_at: it.received_at || rec.intake_date || new Date().toISOString(),
-                    received_by: it.received_by || rec.saved_by_name || 'Warehouse Staff',
-                    intake_record_id: rec.id
-                  });
-                }
-              });
-            }
-          });
-
-          // 8c. Include any local unsaved session scans that are currently in draft
-          (prev || []).forEach(u => {
-            if (u.isSessionDraft && !map.has(String(u.serial_number || '').toUpperCase())) {
-              map.set(String(u.serial_number || '').toUpperCase(), u);
-            }
-          });
-
-          const merged = Array.from(map.values()).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
-          try {
-            localStorage.setItem('mdc_inventory', JSON.stringify(merged));
-          } catch (e) {}
-          dbStorage.setItem('mdc_inventory', merged);
-          return merged;
         });
-      } catch (unitErr) {
-        console.warn('inventory_units fetch note:', unitErr.message);
-      }
 
-      setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
+        // 8c. Include any local unsaved session scans that are currently in draft
+        (prev || []).forEach(u => {
+          if (u.isSessionDraft && !map.has(String(u.serial_number || '').toUpperCase())) {
+            map.set(String(u.serial_number || '').toUpperCase(), u);
+          }
+        });
+
+        const merged = Array.from(map.values()).sort((a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0));
+        try {
+          localStorage.setItem('mdc_inventory', JSON.stringify(merged));
+        } catch (e) {}
+        dbStorage.setItem('mdc_inventory', merged);
+        return merged;
+      });
+
+      const syncNow = new Date();
+      setLastSyncedAt(syncNow);
+      setCloudSyncStatus({ isSaving: false, lastSaved: syncNow, isOnline: true });
+      return true;
     } catch (e) {
-      console.warn('Supabase initial fetch skipped (offline or unauthenticated):', e.message);
+      console.warn('Supabase fetch note (offline or unauthenticated):', e.message);
       setCloudSyncStatus(prev => ({ ...prev, isOnline: false }));
+      return false;
+    }
+  };
+
+  // Automated Centralized Auto-Refresh Controller (with intelligent throttling & non-blocking SWR)
+  const autoRefreshData = async ({ silent = true, force = false, reason = 'auto' } = {}) => {
+    const now = Date.now();
+    // Throttle automatic revalidations to avoid spamming the DB within 2500ms
+    if (!force && now - lastRefreshTimeRef.current < 2500) {
+      return { success: true, throttled: true };
+    }
+    lastRefreshTimeRef.current = now;
+    setIsAutoRefreshing(true);
+
+    try {
+      try {
+        localStorage.removeItem('mdc_is_cleared');
+        dbStorage.removeItem('mdc_is_cleared');
+      } catch (e) {}
+
+      const success = await hydrateFromSupabase();
+      if (!silent) {
+        if (success) {
+          showToast('Successfully synced latest live data from database!', 'success');
+        } else {
+          showToast('Database sync completed (offline/local fallback active)', 'info');
+        }
+      }
+      return { success };
+    } catch (err) {
+      console.warn('Auto-refresh error:', err);
+      if (!silent) {
+        showToast(`Sync error: ${err.message}`, 'error');
+      }
+      return { success: false, error: err.message };
+    } finally {
+      setTimeout(() => {
+        setIsAutoRefreshing(false);
+      }, 350);
     }
   };
 
   const refreshDataFromCloud = async () => {
-    try {
-      localStorage.removeItem('mdc_is_cleared');
-      dbStorage.removeItem('mdc_is_cleared');
-    } catch (e) {}
-
-    await hydrateFromSupabase();
-    showToast('Successfully synced latest live data from cloud database!', 'success');
+    return await autoRefreshData({ silent: false, force: true, reason: 'Manual sync trigger' });
   };
 
-  // Initial Supabase Hydration check and Realtime Sync on app mount
+  // 1. Initial Supabase Hydration and Realtime Subscriptions on app mount
   useEffect(() => {
     let realtimeChannel = null;
 
-    hydrateFromSupabase();
+    autoRefreshData({ silent: true, force: true, reason: 'Initial app mount' });
 
     // Set up Realtime listener for multi-user synchronization
     try {
@@ -1769,22 +1832,22 @@ export function AppProvider({ children }) {
         realtimeChannel = supabase
           .channel('public-db-changes')
           .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory_units' }, () => {
-            hydrateFromSupabase();
+            autoRefreshData({ silent: true, force: true, reason: 'Realtime inventory_units change' });
           })
           .on('postgres_changes', { event: '*', schema: 'public', table: 'dc_intake_records' }, () => {
-            hydrateFromSupabase();
+            autoRefreshData({ silent: true, force: true, reason: 'Realtime dc_intake_records change' });
           })
           .on('postgres_changes', { event: '*', schema: 'public', table: 'forecast_entries' }, () => {
-            hydrateFromSupabase();
+            autoRefreshData({ silent: true, force: true, reason: 'Realtime forecast_entries change' });
           })
           .on('postgres_changes', { event: '*', schema: 'public', table: 'allocation_items' }, () => {
-            hydrateFromSupabase();
+            autoRefreshData({ silent: true, force: true, reason: 'Realtime allocation_items change' });
           })
           .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
-            hydrateFromSupabase();
+            autoRefreshData({ silent: true, force: true, reason: 'Realtime profiles change' });
           })
           .on('postgres_changes', { event: '*', schema: 'public', table: 'saved_records' }, () => {
-            hydrateFromSupabase();
+            autoRefreshData({ silent: true, force: true, reason: 'Realtime saved_records change' });
           })
           .subscribe();
       }
@@ -1798,6 +1861,54 @@ export function AppProvider({ children }) {
       }
     };
   }, []);
+
+  // 2. Auto-Refresh on Page Navigation (visiting Receive Parts, Forecasting, Allocation Data, Intake Records, Records, Dashboard, etc.)
+  useEffect(() => {
+    if (currentUser && activeTab) {
+      autoRefreshData({ silent: true, force: false, reason: `Page visit: ${activeTab}` });
+    }
+  }, [activeTab, currentUser]);
+
+  // 3. Auto-Refresh on Window Focus, Tab Visibility Change, and Network Reconnection
+  useEffect(() => {
+    const handleFocusOrVisibility = () => {
+      if (document.visibilityState === 'visible' && currentUser) {
+        // If returning to tab and last refresh was > 6 seconds ago, trigger seamless background revalidation
+        const now = Date.now();
+        if (now - lastRefreshTimeRef.current >= 6000) {
+          autoRefreshData({ silent: true, force: false, reason: 'Tab/Window refocus' });
+        }
+      }
+    };
+
+    const handleOnline = () => {
+      if (currentUser) {
+        autoRefreshData({ silent: false, force: true, reason: 'Network reconnected' });
+      }
+    };
+
+    window.addEventListener('focus', handleFocusOrVisibility);
+    document.addEventListener('visibilitychange', handleFocusOrVisibility);
+    window.addEventListener('online', handleOnline);
+
+    return () => {
+      window.removeEventListener('focus', handleFocusOrVisibility);
+      document.removeEventListener('visibilitychange', handleFocusOrVisibility);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [currentUser]);
+
+  // 4. Periodic background heartbeat revalidation (every 60 seconds)
+  useEffect(() => {
+    if (!currentUser) return;
+    const heartbeatInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        autoRefreshData({ silent: true, force: false, reason: 'Periodic background heartbeat' });
+      }
+    }, 60000);
+    return () => clearInterval(heartbeatInterval);
+  }, [currentUser]);
+
 
   // --- DYNAMIC UPLOAD DATASET APPLIER ---
   const applyParsedDataset = async (dataset, auditMeta = null) => {
@@ -3815,6 +3926,11 @@ export function AppProvider({ children }) {
 
   // 3. Delete a Historical Saved Record
   const deletePeriodRecord = async (recordId) => {
+    if (currentUser && currentUser.role !== 'superadmin' && currentUser.role !== 'admin') {
+      showToast('Unauthorized: Superadmin or Admin privileges required to delete saved records.', 'error');
+      return { success: false, error: 'Unauthorized' };
+    }
+
     const record = savedRecords.find(r => r.id === recordId);
     if (!record) {
       return { success: false, error: 'Record not found' };
@@ -4013,6 +4129,11 @@ export function AppProvider({ children }) {
 
   // Delete a saved intake record
   const deleteIntakeRecord = async (recordId) => {
+    if (currentUser && currentUser.role !== 'superadmin' && currentUser.role !== 'admin') {
+      showToast('Unauthorized: Superadmin or Admin privileges required to delete intake records.', 'error');
+      return { success: false, error: 'Unauthorized' };
+    }
+
     const recordToDelete = dcIntakeRecords.find(r => r.id === recordId);
     const serialsToDelete = (recordToDelete?.items || []).map(u => String(u.serial_number || '').toUpperCase());
 
@@ -4161,6 +4282,9 @@ export function AppProvider({ children }) {
         applyParsedDataset,
         syncAllDataToCloud,
         refreshDataFromCloud,
+        isAutoRefreshing,
+        lastSyncedAt,
+        autoRefreshData,
         resetToDefaultData,
         clearAllData
       }}

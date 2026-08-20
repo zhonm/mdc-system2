@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext';
 import { calculateLinearRegressionForecast } from '../utils/forecastEngine';
 import { exportForecastToExcel } from '../utils/excelParser';
 import SaveRecordModal from './SaveRecordModal';
-import { Download, TrendingUp, UploadCloud, BookmarkPlus, Printer } from 'lucide-react';
+import { Download, TrendingUp, UploadCloud, BookmarkPlus, Printer, RefreshCw, CheckCircle2 } from 'lucide-react';
 
 export default function Forecasting() {
   const {
@@ -12,6 +12,9 @@ export default function Forecasting() {
     selectedCategory,
     updateForecastOverride,
     setActiveTab,
+    isAutoRefreshing,
+    lastSyncedAt,
+    autoRefreshData,
     showToast,
     activePeriod
   } = useApp();
@@ -66,13 +69,52 @@ export default function Forecasting() {
       <div className="card" style={{ marginBottom: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           <div>
-            <h3>Demand Forecasting Engine ({activePeriod?.label || 'September 2026'})</h3>
-            <p style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <h3 style={{ margin: 0 }}>Demand Forecasting Engine ({activePeriod?.label || 'September 2026'})</h3>
+              <span
+                className="badge"
+                style={{
+                  background: isAutoRefreshing ? '#f0f9ff' : '#ecfdf5',
+                  color: isAutoRefreshing ? '#0284c7' : '#047857',
+                  border: `1px solid ${isAutoRefreshing ? '#7dd3fc' : '#a7f3d0'}`,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  transition: 'all 0.2s ease'
+                }}
+                title={isAutoRefreshing ? "Auto-refreshing latest forecasting model from database..." : "Forecast data is auto-refreshed on page visit and synchronized across all accounts"}
+              >
+                {isAutoRefreshing ? (
+                  <>
+                    <RefreshCw size={11} className="spin" />
+                    <span>Auto-Refreshing...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={11} />
+                    <span>Live Synced</span>
+                  </>
+                )}
+              </span>
+            </div>
+            <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px', marginBottom: 0 }}>
               Linear regression ($y = \alpha + \beta x$) computed over historical repair counts
+              {lastSyncedAt && <span style={{ marginLeft: '8px', opacity: 0.8 }}>• Verified: {new Date(lastSyncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
             </p>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => autoRefreshData && autoRefreshData({ force: true, silent: false, reason: 'Forecasting manual refresh' })}
+              disabled={isAutoRefreshing}
+              title="Force reload latest forecasting data from database"
+              style={{ display: 'flex', alignItems: 'center', gap: '5px' }}
+            >
+              <RefreshCw size={13} className={isAutoRefreshing ? 'spin' : ''} />
+              <span>{isAutoRefreshing ? 'Syncing...' : 'Refresh'}</span>
+            </button>
+
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => setShowSaveModal(true)}

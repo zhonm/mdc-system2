@@ -309,6 +309,25 @@ h1, h2, h3, h4 {
   to { transform: translateY(0); opacity: 1; }
 }
 
+/* Animation Utilities */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin, .animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes pulseLive {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.92); }
+}
+
+.pulse-live {
+  animation: pulseLive 2s ease-in-out infinite;
+}
+
 /* Print Styles */
 @media print {
   body {
@@ -324,3 +343,4 @@ h1, h2, h3, h4 {
     overflow: visible !important;
   }
 }
+
