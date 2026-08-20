@@ -12,6 +12,7 @@ export default function Header() {
     searchQuery,
     setSearchQuery,
     syncAllDataToCloud,
+    refreshDataFromCloud,
     showToast
   } = useApp();
 
@@ -20,7 +21,8 @@ export default function Header() {
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
-      await syncAllDataToCloud();
+      if (refreshDataFromCloud) await refreshDataFromCloud();
+      if (syncAllDataToCloud) await syncAllDataToCloud();
     } finally {
       setTimeout(() => setIsSyncing(false), 800);
     }

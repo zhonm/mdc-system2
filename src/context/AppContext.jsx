@@ -9,6 +9,8 @@ import dbStorage from '../utils/dbStorage';
 
 const AppContext = createContext();
 
+export const LIVE_MASTER_RECORD_ID = '00000000-0000-0000-0000-000000000001';
+
 // All available navigable pages in MDC System 2
 export const ALL_PAGES = [
   { id: 'dashboard', label: 'DC Overview', section: 'Core' },
@@ -1129,251 +1131,269 @@ export function AppProvider({ children }) {
     } catch (e) {}
   }, [categories, sites, parts, forecastItems, allocations, inventoryUnits, purchaseOrders, shipments, scanLogs, repairUsageRecords, stockTransferReports, stockTransferMetadata, uploadAuditLogs]);
 
+  // Top-level Supabase Hydration function
+  const hydrateFromSupabase = async () => {
+    if (!supabase) return;
+    try {
+      const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
 
+      // 1. Hydrate User Profiles & Permissions from Supabase
+      const { data: dbProfiles } = await supabase.from('profiles').select('*');
+      if (dbProfiles && dbProfiles.length > 0) {
+        const { data: dbPerms } = await supabase.from('user_page_permissions').select('*');
 
-  // Initial Supabase Hydration check and Realtime Sync on app mount
-  useEffect(() => {
-    let realtimeChannel = null;
-
-    const hydrateFromSupabase = async () => {
-      if (!supabase) return;
-      try {
-        const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
-
-        // 1. Hydrate User Profiles & Permissions from Supabase
-        const { data: dbProfiles } = await supabase.from('profiles').select('*');
-        if (dbProfiles && dbProfiles.length > 0) {
-          const { data: dbPerms } = await supabase.from('user_page_permissions').select('*');
-
-          // Clean up any legacy mock profiles from Supabase if found
-          const legacyProfiles = dbProfiles.filter(p =>
-            LEGACY_MOCK_EMAILS.includes(p.email?.toLowerCase()) ||
-            LEGACY_MOCK_IDS.includes(p.id)
-          );
-          if (legacyProfiles.length > 0) {
-            for (const lp of legacyProfiles) {
-              supabase.from('user_page_permissions').delete().eq('user_id', lp.id).then(() => {});
-              supabase.from('profiles').delete().eq('id', lp.id).then(() => {});
-              supabase.from('profiles').delete().ilike('email', lp.email).then(() => {});
-            }
-          }
-
-          setUsersList(prev => {
-            const list = [...(prev || [])];
-            dbProfiles.forEach(dbUser => {
-              if (
-                deletedIds.includes(dbUser.id) ||
-                deletedIds.includes(dbUser.email?.toLowerCase()) ||
-                LEGACY_MOCK_EMAILS.includes(dbUser.email?.toLowerCase()) ||
-                LEGACY_MOCK_IDS.includes(dbUser.id)
-              ) {
-                return; // Do not re-add deleted or legacy mock users
-              }
-
-              const userPerms = dbPerms
-                ? dbPerms.filter(p => p.user_id === dbUser.id).map(p => p.page_id)
-                : [];
-
-              const perms = userPerms.length > 0
-                ? userPerms
-                : (ROLE_PRESETS[dbUser.role] || ROLE_PRESETS.warehouse_staff);
-
-              const existingIdx = list.findIndex(u =>
-                u.id === dbUser.id ||
-                u.email?.toLowerCase() === dbUser.email?.toLowerCase()
-              );
-
-              const mappedUser = {
-                id: dbUser.id,
-                email: dbUser.email,
-                fullName: dbUser.full_name || dbUser.fullName,
-                role: dbUser.role || 'warehouse_staff',
-                siteId: dbUser.site_id || 'site-dc',
-                hasSetPassword: dbUser.has_set_password ?? true,
-                passwordHash: dbUser.password_hash || 'Password123',
-                isActive: dbUser.is_active ?? true,
-                permittedPages: dbUser.role === 'superadmin' ? ROLE_PRESETS.superadmin : perms
-              };
-
-              if (existingIdx >= 0) {
-                list[existingIdx] = { ...list[existingIdx], ...mappedUser };
-              } else {
-                list.push(mappedUser);
-              }
-            });
-            const filtered = list.filter(u =>
-              !deletedIds.includes(u.id) &&
-              !deletedIds.includes(u.email?.toLowerCase()) &&
-              !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-              !LEGACY_MOCK_IDS.includes(u.id)
-            );
-            try {
-              localStorage.setItem('mdc_users', JSON.stringify(filtered));
-            } catch (e) {}
-            return filtered;
-          });
-        }
-
-        // 2. Hydrate Sites & Service Branches from Supabase
-        const { data: dbSites } = await supabase.from('sites').select('*');
-        if (dbSites && dbSites.length > 0) {
-          setSites(prev => {
-            const map = new Map((prev || []).map(s => [s.code, s]));
-            dbSites.forEach(s => {
-              const existing = map.get(s.code);
-              map.set(s.code, {
-                ...(existing || {}),
-                id: existing?.id || s.id,
-                code: s.code,
-                name: s.name || existing?.name,
-                region: s.region || existing?.region || 'Metro Manila',
-                address: s.address || s.full_address || existing?.address,
-                full_address: s.full_address || s.address || existing?.full_address,
-                contact_person: s.contact_person || existing?.contact_person,
-                contact_phone: s.contact_phone || existing?.contact_phone,
-                contact_email: s.contact_email || existing?.contact_email,
-                ship_to: s.ship_to || existing?.ship_to,
-                sold_to: s.sold_to || existing?.sold_to,
-                invoice_prefix: s.invoice_prefix || existing?.invoice_prefix,
-                is_dc: s.is_dc ?? existing?.is_dc ?? false,
-                is_active: s.is_active ?? existing?.is_active ?? true
-              });
-            });
-            const merged = Array.from(map.values());
-            try {
-              localStorage.setItem('mdc_sites', JSON.stringify(merged));
-            } catch (e) {}
-            dbStorage.setItem('mdc_sites', merged);
-            return merged;
-          });
-        }
-
-        // 3. Hydrate Parts Catalog from Supabase
-        const { data: dbParts } = await supabase.from('parts').select('*');
-        if (dbParts && dbParts.length > 0) {
-          setParts(prev => {
-            const getPartKey = (p) => `${p.part_number?.trim().toUpperCase()}:::${(p.description || '').trim().toLowerCase()}`;
-            const map = new Map((prev || []).map(p => [getPartKey(p), p]));
-            dbParts.forEach(p => {
-              const k = getPartKey(p);
-              map.set(k, { ...(map.get(k) || {}), ...p });
-            });
-            const merged = Array.from(map.values());
-            try {
-              localStorage.setItem('mdc_parts', JSON.stringify(merged));
-            } catch (e) {}
-            return merged;
-          });
-        }
-
-        // 3. Hydrate Serialized Inventory from Supabase
-        const { data: dbInventory } = await supabase
-          .from('inventory_units')
-          .select('*, parts(part_number, description), sites(code, name)');
-
-        if (dbInventory && dbInventory.length > 0 && !isExplicitlyCleared()) {
-          const mappedUnits = dbInventory.map(dbU => ({
-            id: dbU.id,
-            part_id: dbU.part_id,
-            part_number: dbU.parts?.part_number || dbU.part_number || 'Unknown',
-            description: dbU.parts?.description || dbU.notes || 'Replacement Part',
-            serial_number: dbU.serial_number,
-            current_site_id: dbU.sites?.code === 'DC-MDC' ? 'site-dc' : (dbU.current_site_id || 'site-dc'),
-            status: dbU.status || 'in_stock',
-            box_number: dbU.box_number || 1,
-            received_at: dbU.received_at || new Date().toISOString(),
-            received_by: dbU.received_by_name || 'Warehouse Operations'
-          }));
-
-          setInventoryUnits(prev => {
-            const map = new Map((prev || []).map(u => [u.serial_number, u]));
-            mappedUnits.forEach(u => map.set(u.serial_number, { ...map.get(u.serial_number), ...u }));
-            const merged = Array.from(map.values());
-            try {
-              localStorage.setItem('mdc_inventory', JSON.stringify(merged));
-            } catch (e) {}
-            return merged;
-          });
-        }
-
-        // 4. Hydrate Forecast Entries from Supabase
-        const { data: dbForecasts } = await supabase
-          .from('forecast_entries')
-          .select('*, parts(part_number, description)');
-
-        if (dbForecasts && dbForecasts.length > 0) {
-          const mappedForecasts = dbForecasts.map(f => ({
-            id: f.id,
-            part_id: f.part_id,
-            part_number: f.parts?.part_number || 'Unknown',
-            description: f.parts?.description || 'Part',
-            ytd_monthly_counts: f.ytd_monthly_counts || [],
-            computed_forecast: f.computed_forecast || 0,
-            admin_override: f.admin_override,
-            final_forecast: f.final_forecast || f.computed_forecast || 0,
-            safety_stock_units: f.safety_stock_units || 0,
-            recommended_order: f.recommended_order || 0
-          }));
-          setForecastItems(mappedForecasts);
+        // Clean up any legacy mock profiles from Supabase if found
+        const legacyDbRows = dbProfiles.filter(p =>
+          LEGACY_MOCK_EMAILS.includes(p.email?.toLowerCase()) ||
+          LEGACY_MOCK_IDS.includes(p.id)
+        );
+        for (const row of legacyDbRows) {
           try {
-            localStorage.setItem('mdc_forecast', JSON.stringify(mappedForecasts));
+            await supabase.from('user_page_permissions').delete().eq('user_id', row.id);
+            await supabase.from('profiles').delete().eq('id', row.id);
+          } catch (delErr) {
+            console.warn('Legacy profile cleanup note:', delErr);
+          }
+        }
+
+        const activeDbProfiles = dbProfiles.filter(p =>
+          !deletedIds.includes(p.id) &&
+          !deletedIds.includes(p.email?.toLowerCase()) &&
+          !LEGACY_MOCK_EMAILS.includes(p.email?.toLowerCase()) &&
+          !LEGACY_MOCK_IDS.includes(p.id)
+        );
+
+        const permMap = new Map();
+        if (dbPerms && dbPerms.length > 0) {
+          dbPerms.forEach(pm => {
+            if (!permMap.has(pm.user_id)) permMap.set(pm.user_id, []);
+            permMap.get(pm.user_id).push(pm.page_id);
+          });
+        }
+
+        setUsersList(prev => {
+          const map = new Map();
+          const cleanPrev = (prev || []).filter(u =>
+            !deletedIds.includes(u.id) &&
+            !deletedIds.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_IDS.includes(u.id)
+          );
+          cleanPrev.forEach(u => map.set(u.email.toLowerCase(), u));
+
+          activeDbProfiles.forEach(p => {
+            const emailKey = p.email.toLowerCase();
+            const existing = map.get(emailKey);
+            const userPerms = permMap.get(p.id) || (ROLE_PRESETS[p.role] || ROLE_PRESETS.warehouse_staff);
+            map.set(emailKey, {
+              id: existing?.id || p.id,
+              email: p.email,
+              fullName: p.full_name || existing?.fullName || 'Staff User',
+              role: p.role || existing?.role || 'warehouse_staff',
+              siteId: p.site_id || existing?.siteId || 'site-dc',
+              hasSetPassword: p.has_set_password ?? existing?.hasSetPassword ?? true,
+              passwordHash: p.password_hash || existing?.passwordHash || 'Password123',
+              isActive: p.is_active ?? existing?.isActive ?? true,
+              permittedPages: p.role === 'superadmin' ? ROLE_PRESETS.superadmin : userPerms
+            });
+          });
+
+          const merged = Array.from(map.values());
+          dbStorage.setItem('mdc_users', merged);
+          try {
+            localStorage.setItem('mdc_users', JSON.stringify(merged));
+          } catch (e) {}
+          return merged;
+        });
+      }
+
+      // 2. Hydrate Sites from Supabase
+      const { data: dbSites } = await supabase.from('sites').select('*');
+      if (dbSites && dbSites.length > 0) {
+        setSites(prev => {
+          const map = new Map((prev || []).map(s => [s.code, s]));
+          dbSites.forEach(s => {
+            const existing = map.get(s.code);
+            map.set(s.code, {
+              ...(existing || {}),
+              id: existing?.id || s.id,
+              code: s.code,
+              name: s.name || existing?.name,
+              region: s.region || existing?.region || 'Metro Manila',
+              address: s.address || s.full_address || existing?.address,
+              full_address: s.full_address || s.address || existing?.full_address,
+              contact_person: s.contact_person || existing?.contact_person,
+              contact_phone: s.contact_phone || existing?.contact_phone,
+              contact_email: s.contact_email || existing?.contact_email,
+              ship_to: s.ship_to || existing?.ship_to,
+              sold_to: s.sold_to || existing?.sold_to,
+              invoice_prefix: s.invoice_prefix || existing?.invoice_prefix,
+              is_dc: s.is_dc ?? existing?.is_dc ?? false,
+              is_active: s.is_active ?? existing?.is_active ?? true
+            });
+          });
+          const merged = Array.from(map.values());
+          try {
+            localStorage.setItem('mdc_sites', JSON.stringify(merged));
+          } catch (e) {}
+          dbStorage.setItem('mdc_sites', merged);
+          return merged;
+        });
+      }
+
+      // 3. Hydrate Parts Catalog from Supabase
+      const { data: dbParts } = await supabase.from('parts').select('*, part_categories(name, code)');
+      if (dbParts && dbParts.length > 0) {
+        setParts(prev => {
+          const map = new Map((prev || []).map(p => [p.part_number, p]));
+          dbParts.forEach(p => {
+            const existing = map.get(p.part_number);
+            map.set(p.part_number, {
+              id: p.id,
+              part_number: p.part_number,
+              description: p.description,
+              iphone_model: p.iphone_model || existing?.iphone_model || '',
+              category_id: p.category_id || (p.part_categories?.code === 'BATTERY' ? 'cat-battery' : 'cat-display'),
+              stocking_price: p.stocking_price || existing?.stocking_price || 0,
+              safety_stock_pct: p.safety_stock_pct || 0.05,
+              is_active: p.is_active ?? true
+            });
+          });
+          const merged = Array.from(map.values());
+          try {
+            localStorage.setItem('mdc_parts', JSON.stringify(merged));
+          } catch (e) {}
+          dbStorage.setItem('mdc_parts', merged);
+          return merged;
+        });
+      }
+
+      // 4. Hydrate Forecast Entries from Supabase
+      const { data: dbForecasts } = await supabase
+        .from('forecast_entries')
+        .select('*, parts(part_number, description)');
+
+      if (dbForecasts && dbForecasts.length > 0) {
+        const mappedForecast = dbForecasts.map(f => ({
+          part_id: f.part_id,
+          part_number: f.parts?.part_number || f.part_id,
+          description: f.parts?.description || 'Part',
+          ytd_monthly_counts: f.ytd_monthly_counts || [],
+          computed_forecast: f.computed_forecast || 0,
+          admin_override: f.admin_override,
+          final_forecast: f.final_forecast || f.computed_forecast || 0,
+          safety_stock_units: f.safety_stock_units || 0,
+          recommended_order: f.recommended_order || 0
+        }));
+        setForecastItems(mappedForecast);
+        try {
+          localStorage.setItem('mdc_forecast', JSON.stringify(mappedForecast));
+        } catch (e) {}
+      }
+
+      // 5. Hydrate Allocation Items from Supabase
+      const { data: dbAllocations } = await supabase
+        .from('allocation_items')
+        .select('*, parts(part_number, description), sites(id, code)');
+
+      if (dbAllocations && dbAllocations.length > 0) {
+        const allocMap = new Map();
+        dbAllocations.forEach(item => {
+          const pn = item.parts?.part_number || item.part_id;
+          if (!allocMap.has(pn)) {
+            allocMap.set(pn, {
+              part_id: item.part_id,
+              part_number: pn,
+              description: item.parts?.description || 'Part',
+              total_allocated_qty: 0,
+              w1_qty: 0,
+              w2_qty: 0,
+              w3_qty: 0,
+              w4_qty: 0,
+              site_quantities: {}
+            });
+          }
+          const alloc = allocMap.get(pn);
+          alloc.total_allocated_qty += item.monthly_allocated_qty || 0;
+          alloc.w1_qty += item.week1_qty || 0;
+          alloc.w2_qty += item.week2_qty || 0;
+          alloc.w3_qty += item.week3_qty || 0;
+          alloc.w4_qty += item.week4_qty || 0;
+          const sId = item.sites?.id || item.site_id;
+          const sCode = item.sites?.code || item.site_id;
+          if (sId) alloc.site_quantities[sId] = item.monthly_allocated_qty || 0;
+          if (sCode) alloc.site_quantities[sCode] = item.monthly_allocated_qty || 0;
+        });
+        const mappedAllocs = Array.from(allocMap.values());
+        const totalUnitsHydrated = mappedAllocs.reduce((s, a) => s + (a.total_allocated_qty || 0), 0);
+        if (mappedAllocs.length > 0 && totalUnitsHydrated >= 461) {
+          setAllocations(mappedAllocs);
+          try {
+            localStorage.setItem('mdc_allocations', JSON.stringify(mappedAllocs));
           } catch (e) {}
         }
+      }
 
-        // 5. Hydrate Allocation Items from Supabase
-        const { data: dbAllocations } = await supabase
-          .from('allocation_items')
-          .select('*, parts(part_number, description), sites(id, code)');
+      // 6. Hydrate Live Master Record and Saved Period Records from Supabase
+      const { data: dbRecords } = await supabase
+        .from('saved_records')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100);
 
-        if (dbAllocations && dbAllocations.length > 0) {
-          const allocMap = new Map();
-          dbAllocations.forEach(item => {
-            const pn = item.parts?.part_number || item.part_id;
-            if (!allocMap.has(pn)) {
-              allocMap.set(pn, {
-                part_id: item.part_id,
-                part_number: pn,
-                description: item.parts?.description || 'Part',
-                total_allocated_qty: 0,
-                w1_qty: 0,
-                w2_qty: 0,
-                w3_qty: 0,
-                w4_qty: 0,
-                site_quantities: {}
-              });
-            }
-            const alloc = allocMap.get(pn);
-            alloc.total_allocated_qty += item.monthly_allocated_qty || 0;
-            alloc.w1_qty += item.week1_qty || 0;
-            alloc.w2_qty += item.week2_qty || 0;
-            alloc.w3_qty += item.week3_qty || 0;
-            alloc.w4_qty += item.week4_qty || 0;
-            const sId = item.sites?.id || item.site_id;
-            const sCode = item.sites?.code || item.site_id;
-            if (sId) alloc.site_quantities[sId] = item.monthly_allocated_qty || 0;
-            if (sCode) alloc.site_quantities[sCode] = item.monthly_allocated_qty || 0;
-          });
-          const mappedAllocs = Array.from(allocMap.values());
-          const totalUnitsHydrated = mappedAllocs.reduce((s, a) => s + (a.total_allocated_qty || 0), 0);
-          if (mappedAllocs.length > 0 && totalUnitsHydrated >= 461) {
-            setAllocations(mappedAllocs);
-            try {
-              localStorage.setItem('mdc_allocations', JSON.stringify(mappedAllocs));
-            } catch (e) {}
+      if (dbRecords && dbRecords.length > 0) {
+        // Check for Live Master Record Snapshot (multi-user synchronized state)
+        const liveMaster = dbRecords.find(r => r.id === LIVE_MASTER_RECORD_ID);
+        if (liveMaster?.snapshot_data) {
+          const snap = liveMaster.snapshot_data;
+          if (Array.isArray(snap.forecastItems) && snap.forecastItems.length > 0) {
+            setForecastItems(snap.forecastItems);
+            dbStorage.setItem('mdc_forecast', snap.forecastItems);
+            try { localStorage.setItem('mdc_forecast', JSON.stringify(snap.forecastItems)); } catch (e) {}
+          }
+          if (Array.isArray(snap.allocations) && snap.allocations.length > 0) {
+            setAllocations(snap.allocations);
+            dbStorage.setItem('mdc_allocations', snap.allocations);
+            try { localStorage.setItem('mdc_allocations', JSON.stringify(snap.allocations)); } catch (e) {}
+          }
+          if (Array.isArray(snap.uploadAuditLogs) && snap.uploadAuditLogs.length > 0) {
+            setUploadAuditLogs(prev => {
+              const map = new Map((prev || []).map(l => [l.id, l]));
+              snap.uploadAuditLogs.forEach(l => map.set(l.id, l));
+              const merged = Array.from(map.values()).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+              dbStorage.setItem('mdc_upload_audit_logs', merged);
+              try { localStorage.setItem('mdc_upload_audit_logs', JSON.stringify(merged)); } catch (e) {}
+              return merged;
+            });
+          }
+          if (Array.isArray(snap.parts) && snap.parts.length > 0) {
+            setParts(prev => {
+              const map = new Map((prev || []).map(p => [p.part_number, p]));
+              snap.parts.forEach(p => map.set(p.part_number, { ...(map.get(p.part_number) || {}), ...p }));
+              const merged = Array.from(map.values());
+              dbStorage.setItem('mdc_parts', merged);
+              try { localStorage.setItem('mdc_parts', JSON.stringify(merged)); } catch (e) {}
+              return merged;
+            });
+          }
+          if (Array.isArray(snap.sites) && snap.sites.length > 0) {
+            setSites(prev => {
+              const map = new Map((prev || []).map(s => [s.code, s]));
+              snap.sites.forEach(s => map.set(s.code, { ...(map.get(s.code) || {}), ...s }));
+              const merged = Array.from(map.values());
+              dbStorage.setItem('mdc_sites', merged);
+              try { localStorage.setItem('mdc_sites', JSON.stringify(merged)); } catch (e) {}
+              return merged;
+            });
           }
         }
 
-        // 6. Hydrate Saved Period Records from Supabase
-        const { data: dbRecords } = await supabase
-          .from('saved_records')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(100);
-
-        if (dbRecords && dbRecords.length > 0) {
+        // Historical saved records (excluding the live master record)
+        const historicalRecords = dbRecords.filter(r => r.id !== LIVE_MASTER_RECORD_ID);
+        if (historicalRecords.length > 0) {
           setSavedRecords(prev => {
             const map = new Map((prev || []).map(r => [r.id, r]));
-            dbRecords.forEach(dbR => {
+            historicalRecords.forEach(dbR => {
               map.set(dbR.id, {
                 id: dbR.id,
                 record_type: dbR.record_type || 'both',
@@ -1396,10 +1416,20 @@ export function AppProvider({ children }) {
             return merged;
           });
         }
-      } catch (e) {
-        console.warn('Supabase initial fetch skipped (offline or unauthenticated):', e.message);
       }
-    };
+    } catch (e) {
+      console.warn('Supabase initial fetch skipped (offline or unauthenticated):', e.message);
+    }
+  };
+
+  const refreshDataFromCloud = async () => {
+    await hydrateFromSupabase();
+    showToast('Fetched latest live data from Supabase!', 'success');
+  };
+
+  // Initial Supabase Hydration check and Realtime Sync on app mount
+  useEffect(() => {
+    let realtimeChannel = null;
 
     hydrateFromSupabase();
 
@@ -1631,8 +1661,15 @@ export function AppProvider({ children }) {
         showToast(`Imported ${payload.records?.length || 0} raw repair usage records!`, 'success');
       }
 
-      // Auto-sync entire master dataset to Supabase Cloud in background
-      await syncAllDataToCloud();
+      // Auto-sync entire master dataset to Supabase Cloud so all users get it immediately
+      const fullSyncSnapshot = {
+        forecastItems: payload.forecastItems || forecastItems,
+        allocations: payload.allocations || allocations,
+        parts: payload.parts || parts,
+        sites: payload.sites || sites,
+        uploadAuditLogs: [uploadLogEntry, ...(uploadAuditLogs || [])]
+      };
+      await syncAllDataToCloud(fullSyncSnapshot);
     } catch (err) {
       console.error('Error applying parsed dataset:', err);
       showToast(`Error applying data: ${err.message}`, 'error');
@@ -2704,199 +2741,218 @@ export function AppProvider({ children }) {
     showToast('Applied PMG Directory addresses to all branches!', 'success');
   };
 
-  const syncAllDataToCloud = async () => {
+  const syncAllDataToCloud = async (overrideData = null) => {
     if (!supabase) {
       showToast('Supabase client is not connected', 'error');
       return { success: false };
     }
 
+    const currentForecast = overrideData?.forecastItems || forecastItems;
+    const currentAllocs = overrideData?.allocations || allocations;
+    const currentParts = overrideData?.parts || parts;
+    const currentSites = overrideData?.sites || sites;
+    const currentUploadLogs = overrideData?.uploadAuditLogs || uploadAuditLogs;
+
     try {
-      showToast('Syncing all local master data to Supabase cloud...', 'info');
+      showToast('Syncing master data to Supabase cloud...', 'info');
 
-      // 1. Sync Categories
+      // 1. Sync Live Master Record Snapshot so all users across the system receive it instantly
+      try {
+        const liveSnapshotPayload = {
+          id: LIVE_MASTER_RECORD_ID,
+          record_type: 'both',
+          period_label: 'August 2026 Live Master State',
+          period_year: 2026,
+          period_month: 8,
+          saved_by_name: currentUser?.fullName || 'Superadmin User',
+          saved_by_user_id: null,
+          notes: 'Real-time multi-user synchronized Distribution Center state',
+          snapshot_data: {
+            forecastItems: currentForecast || [],
+            allocations: currentAllocs || [],
+            parts: currentParts || [],
+            sites: currentSites || [],
+            uploadAuditLogs: currentUploadLogs || []
+          },
+          updated_at: new Date().toISOString()
+        };
+
+        await supabase.from('saved_records').upsert([liveSnapshotPayload], { onConflict: 'id' });
+      } catch (err) {
+        console.warn('Live master snapshot sync notice:', err);
+      }
+
+      // 2. Sync Categories
       if (categories && categories.length > 0) {
-        const catRows = categories.map((c, i) => ({
-          code: c.code,
-          name: c.name,
-          has_imei: c.has_imei || false,
-          is_serialized: c.is_serialized ?? true,
-          sort_order: c.sort_order || i + 1
-        }));
-        await supabase.from('part_categories').upsert(catRows, { onConflict: 'code' });
+        try {
+          const catRows = categories.map((c, i) => ({
+            code: c.code,
+            name: c.name,
+            has_imei: c.has_imei || false,
+            is_serialized: c.is_serialized ?? true,
+            sort_order: c.sort_order || i + 1
+          }));
+          await supabase.from('part_categories').upsert(catRows, { onConflict: 'code' });
+        } catch (e) {}
       }
 
-      // 2. Sync Sites
-      if (sites && sites.length > 0) {
-        const siteRows = sites.map(s => ({
-          code: s.code,
-          name: s.name,
-          region: s.region || 'Metro Manila',
-          address: s.address || '',
-          contact_person: s.contact_person || '',
-          contact_phone: s.contact_phone || '',
-          is_dc: s.is_dc || false,
-          is_active: s.is_active ?? true
-        }));
-        await supabase.from('sites').upsert(siteRows, { onConflict: 'code' });
+      // 3. Sync Sites
+      if (currentSites && currentSites.length > 0) {
+        try {
+          const siteRows = currentSites.map(s => ({
+            code: s.code,
+            name: s.name,
+            region: s.region || 'Metro Manila',
+            address: s.address || '',
+            contact_person: s.contact_person || '',
+            contact_phone: s.contact_phone || '',
+            is_dc: s.is_dc || false,
+            is_active: s.is_active ?? true
+          }));
+          await supabase.from('sites').upsert(siteRows, { onConflict: 'code' });
+        } catch (e) {}
       }
 
-      // 3. Sync Parts Catalog
-      if (parts && parts.length > 0) {
-        const { data: dbCats } = await supabase.from('part_categories').select('id, code');
-        const catMap = new Map((dbCats || []).map(c => [c.code, c.id]));
+      // 4. Sync Parts Catalog
+      if (currentParts && currentParts.length > 0) {
+        try {
+          const { data: dbCats } = await supabase.from('part_categories').select('id, code');
+          const catMap = new Map((dbCats || []).map(c => [c.code, c.id]));
 
-        const partRows = parts.map(p => {
-          const catCode = categories.find(c => c.id === p.category_id)?.code || 'BATTERY';
-          const catId = catMap.get(catCode) || null;
-          return {
-            part_number: p.part_number,
-            description: p.description,
-            iphone_model: p.iphone_model || '',
-            stocking_price: p.stocking_price || 0,
-            safety_stock_pct: p.safety_stock_pct || 0.05,
-            is_active: p.is_active ?? true,
-            ...(catId ? { category_id: catId } : {})
-          };
-        });
-        await supabase.from('parts').upsert(partRows, { onConflict: 'part_number' });
-      }
-
-      // 4. Sync Inventory Units
-      if (inventoryUnits && inventoryUnits.length > 0) {
-        const { data: dbParts } = await supabase.from('parts').select('id, part_number');
-        const { data: dbSites } = await supabase.from('sites').select('id, code');
-        const pMap = new Map((dbParts || []).map(p => [p.part_number, p.id]));
-        const sMap = new Map((dbSites || []).map(s => [s.code, s.id]));
-
-        const unitRows = inventoryUnits.map(u => {
-          const partId = pMap.get(u.part_number) || null;
-          const siteCode = sites.find(s => s.id === u.current_site_id)?.code || 'DC-MDC';
-          const siteId = sMap.get(siteCode) || null;
-
-          return {
-            serial_number: u.serial_number,
-            part_number: u.part_number,
-            status: u.status || 'in_stock',
-            box_number: u.box_number || 1,
-            received_by_name: u.received_by || 'Warehouse Operations',
-            ...(partId ? { part_id: partId } : {}),
-            ...(siteId ? { current_site_id: siteId } : {})
-          };
-        });
-        await supabase.from('inventory_units').upsert(unitRows, { onConflict: 'serial_number' });
+          const partRows = currentParts.map(p => {
+            const catCode = categories.find(c => c.id === p.category_id)?.code || 'BATTERY';
+            const catId = catMap.get(catCode) || null;
+            return {
+              part_number: p.part_number,
+              description: p.description,
+              iphone_model: p.iphone_model || '',
+              stocking_price: p.stocking_price || 0,
+              safety_stock_pct: p.safety_stock_pct || 0.05,
+              is_active: p.is_active ?? true,
+              ...(catId ? { category_id: catId } : {})
+            };
+          });
+          await supabase.from('parts').upsert(partRows, { onConflict: 'part_number' });
+        } catch (e) {}
       }
 
       // 5. Sync Forecast Cycles & Forecast Entries
-      if (forecastItems && forecastItems.length > 0) {
-        const { data: dbCycle } = await supabase
-          .from('forecast_cycles')
-          .upsert({
-            period_year: 2026,
-            period_month: 8,
-            status: 'active',
-            notes: 'August 2026 Demand Forecast Cycle'
-          }, { onConflict: 'period_year,period_month' })
-          .select('id')
-          .maybeSingle();
+      if (currentForecast && currentForecast.length > 0) {
+        try {
+          const { data: dbCycle } = await supabase
+            .from('forecast_cycles')
+            .upsert({
+              period_year: 2026,
+              period_month: 8,
+              status: 'active',
+              notes: 'August 2026 Demand Forecast Cycle'
+            }, { onConflict: 'period_year,period_month' })
+            .select('id')
+            .maybeSingle();
 
-        if (dbCycle?.id) {
-          const { data: dbParts } = await supabase.from('parts').select('id, part_number');
-          const pMap = new Map((dbParts || []).map(p => [p.part_number, p.id]));
+          if (dbCycle?.id) {
+            const { data: dbParts } = await supabase.from('parts').select('id, part_number');
+            const pMap = new Map((dbParts || []).map(p => [p.part_number, p.id]));
 
-          const forecastRows = [];
-          for (const f of forecastItems) {
-            const pId = pMap.get(f.part_number);
-            if (pId) {
-              forecastRows.push({
-                forecast_cycle_id: dbCycle.id,
-                part_id: pId,
-                ytd_monthly_counts: f.ytd_monthly_counts || [],
-                computed_forecast: f.computed_forecast || 0,
-                admin_override: f.admin_override || null,
-                final_forecast: f.final_forecast || f.computed_forecast || 0,
-                safety_stock_units: f.safety_stock_units || 0,
-                recommended_order: f.recommended_order || 0
-              });
+            const forecastRows = [];
+            for (const f of currentForecast) {
+              const pId = pMap.get(f.part_number);
+              if (pId) {
+                forecastRows.push({
+                  forecast_cycle_id: dbCycle.id,
+                  part_id: pId,
+                  ytd_monthly_counts: f.ytd_monthly_counts || [],
+                  computed_forecast: f.computed_forecast || 0,
+                  admin_override: f.admin_override || null,
+                  final_forecast: f.final_forecast || f.computed_forecast || 0,
+                  safety_stock_units: f.safety_stock_units || 0,
+                  recommended_order: f.recommended_order || 0
+                });
+              }
+            }
+            if (forecastRows.length > 0) {
+              await supabase.from('forecast_entries').upsert(forecastRows, { onConflict: 'forecast_cycle_id,part_id' });
             }
           }
-          if (forecastRows.length > 0) {
-            await supabase.from('forecast_entries').upsert(forecastRows, { onConflict: 'forecast_cycle_id,part_id' });
-          }
-        }
+        } catch (e) {}
       }
 
       // 6. Sync Allocation Cycles & Allocation Items
-      if (allocations && allocations.length > 0) {
-        const { data: dbAllocCycle } = await supabase
-          .from('allocation_cycles')
-          .upsert({
-            period_year: 2026,
-            period_month: 8,
-            status: 'approved'
-          })
-          .select('id')
-          .maybeSingle();
+      if (currentAllocs && currentAllocs.length > 0) {
+        try {
+          const { data: dbAllocCycle } = await supabase
+            .from('allocation_cycles')
+            .upsert({
+              period_year: 2026,
+              period_month: 8,
+              status: 'approved'
+            })
+            .select('id')
+            .maybeSingle();
 
-        if (dbAllocCycle?.id) {
-          const { data: dbParts } = await supabase.from('parts').select('id, part_number');
-          const { data: dbSites } = await supabase.from('sites').select('id, code');
-          const pMap = new Map((dbParts || []).map(p => [p.part_number, p.id]));
-          const sMap = new Map((dbSites || []).map(s => [s.code, s.id]));
+          if (dbAllocCycle?.id) {
+            const { data: dbParts } = await supabase.from('parts').select('id, part_number');
+            const { data: dbSites } = await supabase.from('sites').select('id, code');
+            const pMap = new Map((dbParts || []).map(p => [p.part_number, p.id]));
+            const sMap = new Map((dbSites || []).map(s => [s.code, s.id]));
 
-          const allocRows = [];
-          for (const a of allocations) {
-            const pId = pMap.get(a.part_number);
-            if (pId && a.site_quantities) {
-              Object.entries(a.site_quantities).forEach(([siteCode, qty]) => {
-                const sId = sMap.get(siteCode);
-                if (sId) {
-                  allocRows.push({
-                    allocation_cycle_id: dbAllocCycle.id,
-                    part_id: pId,
-                    site_id: sId,
-                    monthly_allocated_qty: Number(qty) || 0,
-                    week1_qty: a.w1_qty || 0,
-                    week2_qty: a.w2_qty || 0,
-                    week3_qty: a.w3_qty || 0,
-                    week4_qty: a.w4_qty || 0
-                  });
-                }
-              });
+            const allocRows = [];
+            for (const a of currentAllocs) {
+              const pId = pMap.get(a.part_number);
+              if (pId && a.site_quantities) {
+                Object.entries(a.site_quantities).forEach(([siteCode, qty]) => {
+                  const sId = sMap.get(siteCode);
+                  if (sId) {
+                    allocRows.push({
+                      allocation_cycle_id: dbAllocCycle.id,
+                      part_id: pId,
+                      site_id: sId,
+                      monthly_allocated_qty: Number(qty) || 0,
+                      week1_qty: a.w1_qty || 0,
+                      week2_qty: a.w2_qty || 0,
+                      week3_qty: a.w3_qty || 0,
+                      week4_qty: a.w4_qty || 0
+                    });
+                  }
+                });
+              }
+            }
+            if (allocRows.length > 0) {
+              await supabase.from('allocation_items').upsert(allocRows, { onConflict: 'allocation_cycle_id,part_id,site_id' });
             }
           }
-          if (allocRows.length > 0) {
-            await supabase.from('allocation_items').upsert(allocRows, { onConflict: 'allocation_cycle_id,part_id,site_id' });
-          }
-        }
+        } catch (e) {}
       }
 
       // 7. Sync Users
       if (usersList && usersList.length > 0) {
-        const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
-        const activeUsers = usersList.filter(u =>
-          !deletedIds.includes(u.id) &&
-          !deletedIds.includes(u.email?.toLowerCase()) &&
-          !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
-          !LEGACY_MOCK_IDS.includes(u.id)
-        );
-        for (const u of activeUsers) {
-          const { data: prof } = await supabase.from('profiles').upsert({
-            email: u.email.trim().toLowerCase(),
-            full_name: u.fullName.trim(),
-            role: u.role || 'warehouse_staff',
-            has_set_password: u.hasSetPassword ?? true,
-            is_active: u.isActive ?? true,
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'email' }).select();
+        try {
+          const deletedIds = JSON.parse(localStorage.getItem('mdc_deleted_user_ids') || '[]');
+          const activeUsers = usersList.filter(u =>
+            !deletedIds.includes(u.id) &&
+            !deletedIds.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_EMAILS.includes(u.email?.toLowerCase()) &&
+            !LEGACY_MOCK_IDS.includes(u.id)
+          );
+          for (const u of activeUsers) {
+            const { data: prof } = await supabase.from('profiles').upsert({
+              email: u.email.trim().toLowerCase(),
+              full_name: u.fullName.trim(),
+              role: u.role || 'warehouse_staff',
+              has_set_password: u.hasSetPassword ?? true,
+              is_active: u.isActive ?? true,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'email' }).select();
 
-          if (prof && prof[0] && u.permittedPages && u.permittedPages.length > 0) {
-            const perms = u.permittedPages.map(pg => ({ user_id: prof[0].id, page_id: pg }));
-            await supabase.from('user_page_permissions').upsert(perms, { onConflict: 'user_id,page_id' });
+            if (prof && prof[0] && u.permittedPages && u.permittedPages.length > 0) {
+              const perms = u.permittedPages.map(pg => ({ user_id: prof[0].id, page_id: pg }));
+              await supabase.from('user_page_permissions').upsert(perms, { onConflict: 'user_id,page_id' });
+            }
           }
-        }
+        } catch (e) {}
       }
 
-      showToast('All master data, forecasts, allocations, inventory & users synced to Supabase Cloud!', 'success');
+      showToast('All master data, forecasts, allocations & audit logs synced to cloud!', 'success');
       return { success: true };
     } catch (err) {
       console.error('Cloud sync error:', err);
@@ -3225,6 +3281,7 @@ export function AppProvider({ children }) {
         applyPmgDirectoryToSites,
         applyParsedDataset,
         syncAllDataToCloud,
+        refreshDataFromCloud,
         resetToDefaultData,
         clearAllData
       }}

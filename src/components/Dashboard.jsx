@@ -29,22 +29,24 @@ export default function Dashboard() {
   } = useApp();
 
   // Filtered Parts
+  const isUnfiltered = !selectedCategory || selectedCategory === 'ALL';
   const filteredParts = parts.filter(p => {
-    if (selectedCategory === 'ALL') return true;
-    if (selectedCategory === 'BATTERY') return p.category_id === 'cat-battery';
-    if (selectedCategory === 'DISPLAY') return p.category_id === 'cat-display';
-    if (selectedCategory === 'CAMERA') return p.category_id === 'cat-camera';
-    if (selectedCategory === 'BACK_GLASS') return p.category_id === 'cat-backglass';
+    if (isUnfiltered) return true;
+    if (selectedCategory === 'BATTERY') return p.category_id === 'cat-battery' || p.category_id === 'BATTERY' || p.description?.toUpperCase().includes('BATTERY');
+    if (selectedCategory === 'DISPLAY') return p.category_id === 'cat-display' || p.category_id === 'DISPLAY' || p.description?.toUpperCase().includes('DISPLAY') || p.description?.toUpperCase().includes('SCREEN');
+    if (selectedCategory === 'CAMERA') return p.category_id === 'cat-camera' || p.category_id === 'CAMERA' || p.description?.toUpperCase().includes('CAMERA');
+    if (selectedCategory === 'BACK_GLASS') return p.category_id === 'cat-backglass' || p.category_id === 'BACK_GLASS' || p.description?.toUpperCase().includes('BACK GLASS') || p.description?.toUpperCase().includes('REAR');
     return true;
   });
 
+  const filteredPartNumbers = new Set(filteredParts.map(p => p.part_number?.trim().toUpperCase()));
   const filteredPartIds = new Set(filteredParts.map(p => p.id));
 
   // KPIs
-  const inStockUnits = inventoryUnits.filter(u => u.status === 'in_stock' && (filteredPartIds.size === 0 || filteredPartIds.has(u.part_id))).length;
-  const packedUnits = inventoryUnits.filter(u => u.status === 'packed' && (filteredPartIds.size === 0 || filteredPartIds.has(u.part_id))).length;
+  const inStockUnits = inventoryUnits.filter(u => u.status === 'in_stock' && (isUnfiltered || filteredPartNumbers.has(u.part_number?.trim().toUpperCase()) || filteredPartIds.has(u.part_id))).length;
+  const packedUnits = inventoryUnits.filter(u => u.status === 'packed' && (isUnfiltered || filteredPartNumbers.has(u.part_number?.trim().toUpperCase()) || filteredPartIds.has(u.part_id))).length;
   const totalForecast = forecastItems
-    .filter(f => filteredPartIds.size === 0 || filteredPartIds.has(f.part_id))
+    .filter(f => isUnfiltered || filteredPartNumbers.has(f.part_number?.trim().toUpperCase()) || filteredPartIds.has(f.part_id))
     .reduce((sum, f) => sum + (f.final_forecast || f.computed_forecast || 0), 0);
 
   const openPOs = purchaseOrders.filter(po => po.status !== 'closed' && po.status !== 'received');
