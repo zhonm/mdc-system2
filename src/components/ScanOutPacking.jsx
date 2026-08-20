@@ -355,48 +355,58 @@ export default function ScanOutPacking() {
       showToast('Cannot finalize an empty packing list. Please add parts first.', 'error');
       return;
     }
-    const finalized = {
-      ...currentShipment,
-      id: currentShipment.id || `ship-${Date.now()}`,
-      status: 'shipped',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
 
-    // 1. Permanently save to Database History and Cloud DB
-    saveShipmentToHistory(finalized);
-
-    // 2. Automatically generate and download formatted corporate PDF
-    generatePackingListPDF(finalized, finalized.items || [], selectedSite);
-    
-    // 3. Reset draft from localStorage and initialize fresh workstation for next shipment
     try {
-      localStorage.removeItem('mdc_active_pack_draft');
-    } catch (e) {}
+      const finalized = {
+        ...currentShipment,
+        id: currentShipment.id || `ship-${Date.now()}`,
+        status: 'shipped',
+        created_at: currentShipment.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
 
-    const nextShipmentNumber = `SHIP-202608-${String(shipments.length + 2).padStart(3, '0')}`;
-    const nextInvoiceRef = `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`;
+      // 1. Permanently save to Database History and Cloud DB
+      saveShipment(finalized);
 
-    setCurrentShipment({
-      id: `ship-${Date.now()}`,
-      shipment_number: nextShipmentNumber,
-      invoice_ref: nextInvoiceRef,
-      site_id: selectedSiteId,
-      week_number: selectedWeek,
-      shipment_date: new Date().toLocaleDateString('en-US'),
-      carrier: 'Lite Express',
-      tracking_number: '20227258',
-      total_boxes: 1,
-      status: 'draft',
-      prepared_by_name: currentUser?.fullName || '',
-      verified_by_name: 'Zhon Manaois',
-      receiving_signature: selectedSite?.code || 'ASP NPM',
-      remarks: 'KGB PARTS',
-      items: []
-    });
+      // 2. Automatically generate and download formatted corporate PDF
+      try {
+        generatePackingListPDF(finalized, finalized.items || [], selectedSite);
+      } catch (pdfErr) {
+        console.warn('PDF generation note:', pdfErr);
+      }
+      
+      // 3. Reset draft from localStorage and initialize fresh workstation for next shipment
+      try {
+        localStorage.removeItem('mdc_active_pack_draft');
+      } catch (e) {}
 
-    setScanResult(null);
-    showToast(`Saved to Database & Finalized ${finalized.invoice_ref}! Station ready for next packing list.`, 'success');
+      const nextShipmentNumber = `SHIP-${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(shipments.length + 2).padStart(3, '0')}`;
+      const nextInvoiceRef = `DCMSPIOWNED#${Date.now().toString().slice(-6)}G`;
+
+      setCurrentShipment({
+        id: `ship-${Date.now()}`,
+        shipment_number: nextShipmentNumber,
+        invoice_ref: nextInvoiceRef,
+        site_id: selectedSiteId,
+        week_number: selectedWeek,
+        shipment_date: new Date().toLocaleDateString('en-US'),
+        carrier: 'Lite Express',
+        tracking_number: '20227258',
+        total_boxes: 1,
+        status: 'draft',
+        prepared_by_name: currentUser?.fullName || '',
+        verified_by_name: 'Zhon Manaois',
+        receiving_signature: selectedSite?.code || 'ASP NPM',
+        remarks: 'KGB PARTS',
+        items: []
+      });
+
+      setScanResult(null);
+      showToast(`Finalized & Saved Packing List ${finalized.invoice_ref} (${finalized.items.length} parts) to Database! Station ready for next shipment.`, 'success');
+    } catch (err) {
+      console.error('Finalize shipment error:', err);
+      showToast('Error saving and finalizing packing list: ' + err.message, 'error');
+    }
   };
 
   const filteredManifestItems = useMemo(() => {
@@ -719,8 +729,16 @@ export default function ScanOutPacking() {
             <button
               className="btn btn-primary btn-sm"
               onClick={handleFinalizeShipment}
-              disabled={!currentShipment.items || currentShipment.items.length === 0}
-              style={{ height: '34px', background: '#0284c7', borderColor: '#0284c7', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}
+              style={{
+                height: '34px',
+                background: '#0284c7',
+                borderColor: '#0284c7',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer'
+              }}
               title="Save packing list permanently to database, download PDF, and ready station for next packing list"
             >
               <CheckCircle2 size={15} />
@@ -729,85 +747,85 @@ export default function ScanOutPacking() {
           </div>
         </div>
 
-        {/* Exact HTML Sheet Preview matching Packing List.png */}
+        {/* Exact Corporate Packing List Sheet Matching Google Sheet MSPI_DC PACKING LIST */}
         <div className="packing-list-sheet">
-          <div className="packing-list-header">
+          {/* Top Title Banner */}
+          <div className="packing-list-header-banner">
             <h2>Packing List</h2>
           </div>
 
+          {/* Company Branding & Metadata Block */}
           <div className="packing-company-meta">
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
               <img
                 src="/mobilecare_logo.png"
                 alt="Mobile Care Logo"
                 style={{
-                  width: '52px',
-                  height: '52px',
-                  objectFit: 'contain',
-                  borderRadius: '6px',
-                  border: '1px solid #e2e8f0',
-                  padding: '2px',
-                  background: '#ffffff'
+                  width: '56px',
+                  height: '56px',
+                  objectFit: 'contain'
                 }}
               />
-              <div>
-                <h3 style={{ margin: '0 0 3px 0', fontSize: '13px', fontWeight: 800, color: '#0f172a' }}>
+              <div style={{ lineHeight: '1.35' }}>
+                <h3 style={{ margin: '0 0 3px 0', fontSize: '13px', fontWeight: 800, color: '#0f172a', letterSpacing: '0.01em' }}>
                   MOBILE CARE SERVICES PHILS. INC.
                 </h3>
-                <p style={{ margin: '0 0 2px 0', fontSize: '11.5px', color: '#475569' }}>Business and Distribution Center</p>
-                <p style={{ margin: '0 0 2px 0', fontSize: '11px', color: '#64748b' }}>2/L Northeast Square, #47 Connecticut St. Northeast Greenhills</p>
-                <p style={{ margin: 0, fontSize: '11px', color: '#64748b' }}>San Juan City, Metro Manila</p>
+                <p style={{ margin: '0 0 2px 0', fontSize: '11.5px', color: '#334155' }}>Business and Distribution Center</p>
+                <p style={{ margin: '0 0 2px 0', fontSize: '11px', color: '#475569' }}>2/L Northeast Square, #47</p>
+                <p style={{ margin: '0 0 2px 0', fontSize: '11px', color: '#475569' }}>Connecticut St. Northeast Greenhills</p>
+                <p style={{ margin: 0, fontSize: '11px', color: '#475569' }}>San Juan City, Metro Manila</p>
               </div>
             </div>
 
+            {/* Right Meta Column */}
             <div className="packing-invoice-meta">
-              <div className="packing-invoice-meta-row" style={{ alignItems: 'center' }}>
-                <strong>INVOICE REF:</strong>
+              <div className="packing-invoice-meta-row">
+                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>INVOICE REF:</strong>
                 <input
                   type="text"
                   className="packing-inline-input font-mono"
-                  style={{ width: '210px' }}
-                  value={currentShipment.invoice_ref ?? 'DCMSPIOWNED#20260808G'}
-                  placeholder="DCMSPIOWNED#20260808G"
+                  style={{ width: '220px', fontWeight: 700 }}
+                  value={currentShipment.invoice_ref ?? `DCMSPIOWNED#20260818N`}
+                  placeholder="DCMSPIOWNED#20260818N"
                   title="Click to edit Invoice Reference"
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, invoice_ref: e.target.value }))}
                 />
               </div>
-              <div className="packing-invoice-meta-row" style={{ alignItems: 'center' }}>
-                <strong>SHIPMENT DATE:</strong>
+              <div className="packing-invoice-meta-row">
+                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>SHIPMENT DATE:</strong>
                 <input
                   type="text"
                   className="packing-inline-input"
-                  style={{ width: '130px' }}
+                  style={{ width: '120px' }}
                   value={currentShipment.shipment_date ?? new Date().toLocaleDateString('en-US')}
                   title="Click to edit Shipment Date"
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, shipment_date: e.target.value }))}
                 />
               </div>
-              <div className="packing-invoice-meta-row" style={{ alignItems: 'center' }}>
-                <strong>BOX/S #:</strong>
-                <span>{boxNumber}</span>
+              <div className="packing-invoice-meta-row">
+                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>BOX/S #:</strong>
+                <span style={{ minWidth: '40px', textAlign: 'right', fontWeight: 700, paddingRight: '6px' }}>{boxNumber}</span>
               </div>
-              <div className="packing-invoice-meta-row" style={{ alignItems: 'center' }}>
-                <strong>CARRIER:</strong>
+              <div className="packing-invoice-meta-row">
+                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>CARRIER:</strong>
                 <input
                   type="text"
                   className="packing-inline-input"
-                  style={{ width: '140px' }}
-                  value={currentShipment.carrier ?? 'Lite Express'}
-                  placeholder="Lite Express"
+                  style={{ width: '130px' }}
+                  value={currentShipment.carrier ?? 'Lalamove'}
+                  placeholder="Lalamove"
                   title="Click to edit Carrier"
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, carrier: e.target.value }))}
                 />
               </div>
-              <div className="packing-invoice-meta-row" style={{ alignItems: 'center' }}>
-                <strong>TRACKING NUMBER:</strong>
+              <div className="packing-invoice-meta-row">
+                <strong style={{ fontSize: '11.5px', color: '#0f172a' }}>TRACKING NUMBER:</strong>
                 <input
                   type="text"
                   className="packing-inline-input font-mono"
-                  style={{ width: '160px' }}
-                  value={currentShipment.tracking_number ?? '20227258'}
-                  placeholder="20227258"
+                  style={{ width: '140px' }}
+                  value={currentShipment.tracking_number ?? '20227303'}
+                  placeholder="20227303"
                   title="Click to edit Tracking Number"
                   onChange={(e) => setCurrentShipment(prev => ({ ...prev, tracking_number: e.target.value }))}
                 />
@@ -815,46 +833,46 @@ export default function ScanOutPacking() {
             </div>
           </div>
 
-          {/* Ship To */}
-          <div style={{ marginBottom: '20px', fontSize: '12.5px' }}>
-            <div style={{ display: 'flex', gap: '16px' }}>
-              <strong>Ship To</strong>
+          {/* Ship To Section */}
+          <div className="packing-shipto-section">
+            <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
+              <strong style={{ minWidth: '55px', fontSize: '12px', color: '#0f172a' }}>Ship To</strong>
               <div>
-                <strong>{selectedSite.name}</strong>
-                <div style={{ color: '#475569', fontSize: '11.5px', marginTop: '2px' }}>
+                <strong style={{ fontSize: '12.5px', color: '#0f172a', textTransform: 'uppercase' }}>{selectedSite.name}</strong>
+                <div style={{ color: '#334155', fontSize: '11.5px', marginTop: '2px', lineHeight: '1.4' }}>
                   {selectedSite.address}
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Table */}
+          {/* Packing Manifest Table */}
           <div className="packing-table-container">
             <table className="packing-manifest-table">
               <thead>
                 <tr>
-                  <th style={{ width: '40px' }}>#</th>
-                  <th style={{ width: '130px' }}>PART NUMBER</th>
+                  <th style={{ width: '42px' }}>#</th>
+                  <th style={{ width: '135px' }}>PART NUMBER</th>
                   <th>DESCRIPTION</th>
-                  <th style={{ width: '200px' }}>SERIAL NUMBER</th>
-                  <th style={{ width: '60px' }}>BOX #</th>
-                  <th className="hide-on-print" style={{ width: '50px', textAlign: 'center' }}>Action</th>
+                  <th style={{ width: '210px' }}>SERIAL NUMBER</th>
+                  <th style={{ width: '65px' }}>BOX #</th>
+                  <th className="hide-on-print" style={{ width: '45px', textAlign: 'center' }}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredManifestItems.length === 0 ? (
                   <tr>
-                    <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: '#94a3b8' }}>
+                    <td colSpan={6} style={{ textAlign: 'center', padding: '28px', color: '#94a3b8' }}>
                       {manifestSearch ? `No packed items match "${manifestSearch}"` : 'No items packed yet. Scan parts or import spreadsheet above.'}
                     </td>
                   </tr>
                 ) : (
                   filteredManifestItems.map((it, i) => (
-                    <tr key={i}>
-                      <td style={{ textAlign: 'center' }}>{i + 1}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{it.part_number}</td>
-                      <td>{it.description}</td>
-                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)' }}>{it.serial_number}</td>
+                    <tr key={i} className={i % 2 === 1 ? 'packing-table-row-alt' : ''}>
+                      <td style={{ textAlign: 'center', color: '#64748b' }}>{i + 1}</td>
+                      <td style={{ textAlign: 'center', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{it.part_number}</td>
+                      <td style={{ textAlign: 'left' }}>{it.description}</td>
+                      <td style={{ textAlign: 'center', fontFamily: 'var(--font-mono)', fontSize: '11.5px', letterSpacing: '0.02em' }}>{it.serial_number}</td>
                       <td style={{ textAlign: 'center' }}>{it.box_number || 1}</td>
                       <td className="hide-on-print" style={{ textAlign: 'center' }}>
                         <button
@@ -866,7 +884,7 @@ export default function ScanOutPacking() {
                             background: '#fee2e2',
                             color: '#dc2626',
                             border: 'none',
-                            padding: '3px 6px',
+                            padding: '2px 5px',
                             borderRadius: '4px',
                             cursor: 'pointer',
                             display: 'inline-flex',
@@ -874,7 +892,7 @@ export default function ScanOutPacking() {
                             justifyContent: 'center'
                           }}
                         >
-                          <Trash2 size={13} />
+                          <Trash2 size={12} />
                         </button>
                       </td>
                     </tr>
@@ -884,16 +902,16 @@ export default function ScanOutPacking() {
             </table>
           </div>
 
-          {/* Remarks and Totals Box */}
+          {/* Remarks & Totals Block */}
           <div className="packing-summary-bar">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontWeight: 700, fontSize: '12px' }}>Remarks: </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontWeight: 700, fontSize: '12px', color: '#0f172a' }}>Remarks</span>
               <input
                 type="text"
                 className="packing-inline-input packing-inline-input-left"
-                style={{ width: '240px' }}
+                style={{ width: '260px', fontWeight: 600 }}
                 value={currentShipment.remarks ?? 'KGB PARTS'}
-                placeholder="e.g. KGB PARTS"
+                placeholder="KGB PARTS"
                 title="Click to edit Remarks"
                 onChange={(e) => setCurrentShipment(prev => ({ ...prev, remarks: e.target.value }))}
               />
@@ -911,35 +929,43 @@ export default function ScanOutPacking() {
             </div>
           </div>
 
-          {/* Signatures */}
+          {/* Signatures Row */}
           <div className="packing-signatures">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <strong>Prepared and Counted by: </strong>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <strong style={{ color: '#0f172a' }}>Prepared and Counted by:</strong>
               <input
                 type="text"
                 className="packing-inline-input packing-inline-input-left"
-                style={{ width: '160px' }}
-                value={currentShipment.prepared_by_name ?? (currentUser?.fullName || '')}
-                placeholder={currentUser?.fullName || "User Full Name"}
+                style={{ width: '170px', fontWeight: 600 }}
+                value={currentShipment.prepared_by_name ?? (currentUser?.fullName || 'Joshua Juvida')}
+                placeholder="Joshua Juvida"
                 title="Click to edit Prepared By"
                 onChange={(e) => setCurrentShipment(prev => ({ ...prev, prepared_by_name: e.target.value }))}
               />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <strong>Verified by: </strong>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <strong style={{ color: '#0f172a' }}>Verified by:</strong>
               <input
                 type="text"
                 className="packing-inline-input packing-inline-input-left"
-                style={{ width: '160px' }}
-                value={currentShipment.verified_by_name ?? 'Zhon Manaois'}
-                placeholder="Zhon Manaois"
+                style={{ width: '170px', fontWeight: 600 }}
+                value={currentShipment.verified_by_name ?? 'Anjo Alcazar'}
+                placeholder="Anjo Alcazar"
                 title="Click to edit Verified By"
                 onChange={(e) => setCurrentShipment(prev => ({ ...prev, verified_by_name: e.target.value }))}
               />
             </div>
-            <div>
-              <strong>Receiving Branch Signature: </strong>
-              <span>{selectedSite.code}</span>
+            <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+              <strong style={{ color: '#0f172a' }}>Receiving Branch Signature:</strong>
+              <input
+                type="text"
+                className="packing-inline-input packing-inline-input-left"
+                style={{ width: '170px', fontWeight: 600 }}
+                value={currentShipment.receiving_signature ?? (selectedSite.code ? `APP ${selectedSite.code.replace(/^(site-|asp-)/i, '').toUpperCase()}` : 'APP RM')}
+                placeholder="APP RM"
+                title="Click to edit Receiving Branch Signature"
+                onChange={(e) => setCurrentShipment(prev => ({ ...prev, receiving_signature: e.target.value }))}
+              />
             </div>
           </div>
         </div>
