@@ -1523,7 +1523,7 @@ export function AppProvider({ children }) {
           .limit(2000);
 
         setInventoryUnits(prev => {
-          const map = new Map((prev || []).map(u => [String(u.serial_number || '').toUpperCase(), u]));
+          const map = new Map();
 
           // 8a. Add units from inventory_units table
           if (dbUnits && dbUnits.length > 0) {
@@ -1550,7 +1550,7 @@ export function AppProvider({ children }) {
           }
 
           // 8b. Add units from all saved intake records in dc_intake_records (guarantees cross-account visibility)
-          const allIntakeSources = [...fetchedIntakes, ...(dcIntakeRecords || [])];
+          const allIntakeSources = fetchedIntakes && fetchedIntakes.length > 0 ? fetchedIntakes : (dcIntakeRecords || []);
           allIntakeSources.forEach(rec => {
             if (Array.isArray(rec.items)) {
               rec.items.forEach(it => {
@@ -1573,6 +1573,13 @@ export function AppProvider({ children }) {
                   });
                 }
               });
+            }
+          });
+
+          // 8c. Include any local unsaved session scans that are currently in draft
+          (prev || []).forEach(u => {
+            if (u.isSessionDraft && !map.has(String(u.serial_number || '').toUpperCase())) {
+              map.set(String(u.serial_number || '').toUpperCase(), u);
             }
           });
 
@@ -2319,9 +2326,33 @@ export function AppProvider({ children }) {
     const nextUnits = inventoryUnits.filter(u => String(u.serial_number || '').toUpperCase() !== cleanSerial);
     setInventoryUnits(nextUnits);
 
-    // 2. Remove from LocalStorage (mdc_inventory and mdc_recent_scans)
+    // 2. Remove from dcIntakeRecords state & prepare records to sync in DB
+    const recordsToUpdateInDb = [];
+    setDcIntakeRecords(prev => {
+      const nextRecords = (prev || []).map(rec => {
+        if (Array.isArray(rec.items) && rec.items.some(it => String(it.serial_number || '').toUpperCase() === cleanSerial)) {
+          const filteredItems = rec.items.filter(it => String(it.serial_number || '').toUpperCase() !== cleanSerial);
+          const updatedRec = {
+            ...rec,
+            items: filteredItems,
+            total_units: filteredItems.length,
+            updated_at: new Date().toISOString()
+          };
+          recordsToUpdateInDb.push(updatedRec);
+          return updatedRec;
+        }
+        return rec;
+      });
+      try {
+        localStorage.setItem('mdc_dc_intake_records', JSON.stringify(nextRecords.slice(0, 100)));
+      } catch (e) {}
+      return nextRecords;
+    });
+
+    // 3. Remove from LocalStorage and IndexedDB
     try {
       localStorage.setItem('mdc_inventory', JSON.stringify(nextUnits));
+      dbStorage.setItem('mdc_inventory', nextUnits);
       const recent = JSON.parse(localStorage.getItem('mdc_recent_scans') || '[]');
       const filteredRecent = recent.filter(u => String(u.serial_number || '').toUpperCase() !== cleanSerial);
       localStorage.setItem('mdc_recent_scans', JSON.stringify(filteredRecent));
@@ -2329,12 +2360,32 @@ export function AppProvider({ children }) {
       console.warn('LocalStorage delete error:', e);
     }
 
-    // 3. Remove from Supabase Cloud Database table inventory_units
+    // 4. Remove from Supabase Cloud Database tables (inventory_units & dc_intake_records)
     if (supabase) {
       (async () => {
         setCloudSyncStatus(prev => ({ ...prev, isSaving: true }));
         try {
+          // Delete from inventory_units
           await supabase.from('inventory_units').delete().eq('serial_number', existing.serial_number);
+          
+          // Update affected intake records in Supabase
+          for (const rec of recordsToUpdateInDb) {
+            await supabase.from('dc_intake_records').upsert({
+              id: rec.id,
+              record_name: rec.record_name,
+              intake_date: rec.intake_date,
+              po_id: rec.po_id && !String(rec.po_id).startsWith('po-') ? rec.po_id : null,
+              po_number: rec.po_number,
+              supplier: rec.supplier,
+              total_units: rec.total_units,
+              saved_by_name: rec.saved_by_name,
+              saved_by_user_id: rec.saved_by_user_id,
+              notes: rec.notes,
+              category_breakdown: rec.category_breakdown,
+              items: rec.items,
+              updated_at: rec.updated_at
+            });
+          }
           setCloudSyncStatus({ isSaving: false, lastSaved: new Date(), isOnline: true });
         } catch (dbErr) {
           console.warn('Supabase delete inventory_unit notice:', dbErr.message);
@@ -3791,19 +3842,45 @@ export function AppProvider({ children }) {
 
   // Delete a saved intake record
   const deleteIntakeRecord = async (recordId) => {
+    const recordToDelete = dcIntakeRecords.find(r => r.id === recordId);
+    const serialsToDelete = (recordToDelete?.items || []).map(u => String(u.serial_number || '').toUpperCase());
+
+    // 1. Remove from dcIntakeRecords state
     setDcIntakeRecords(prev => prev.filter(r => r.id !== recordId));
     try {
       const existing = JSON.parse(localStorage.getItem('mdc_dc_intake_records') || '[]');
       localStorage.setItem('mdc_dc_intake_records', JSON.stringify(existing.filter(r => r.id !== recordId)));
     } catch (e) {}
 
-    if (supabase) {
-      try {
-        await supabase.from('dc_intake_records').delete().eq('id', recordId);
-      } catch (e) {}
+    // 2. Remove all contained parts from inventoryUnits state and local storage
+    if (serialsToDelete.length > 0) {
+      setInventoryUnits(prev => {
+        const next = (prev || []).filter(u => !serialsToDelete.includes(String(u.serial_number || '').toUpperCase()));
+        try {
+          localStorage.setItem('mdc_inventory', JSON.stringify(next));
+        } catch (e) {}
+        dbStorage.setItem('mdc_inventory', next);
+        return next;
+      });
     }
 
-    showToast(`Deleted Intake Record ${recordId}`, 'info');
+    // 3. Delete from Supabase tables (dc_intake_records & inventory_units)
+    if (supabase) {
+      (async () => {
+        try {
+          await supabase.from('dc_intake_records').delete().eq('id', recordId);
+          if (serialsToDelete.length > 0) {
+            for (const serial of serialsToDelete) {
+              await supabase.from('inventory_units').delete().eq('serial_number', serial);
+            }
+          }
+        } catch (e) {
+          console.warn('Supabase deleteIntakeRecord notice:', e.message);
+        }
+      })();
+    }
+
+    showToast(`Deleted Intake Record ${recordId} and removed its parts from inventory and database`, 'info');
     return { success: true };
   };
 
